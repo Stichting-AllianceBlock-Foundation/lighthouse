@@ -232,6 +232,13 @@ impl<E: EthSpec> Attestation<E> {
             Attestation::Electra(att) => att.aggregation_bits.get(index),
         }
     }
+
+    pub fn to_single_attestation_with_attester_index(&self, attester_index: usize) -> Result<SingleAttestation, Error> {
+        match self {
+            Self::Base(_) => Err(Error::IncorrectStateVariant),
+            Self::Electra(attn) => attn.to_single_attestation_with_attester_index(attester_index)
+        }
+    }
 }
 
 impl<E: EthSpec> AttestationRef<'_, E> {
@@ -286,6 +293,14 @@ impl<E: EthSpec> AttestationRef<'_, E> {
 impl<E: EthSpec> AttestationElectra<E> {
     pub fn committee_index(&self) -> Option<u64> {
         self.get_committee_indices().first().cloned()
+    }
+
+    pub fn get_aggregation_bits(&self) -> Vec<u64> {
+        self.aggregation_bits
+            .iter()
+            .enumerate()
+            .filter_map(|(index, bit)| if bit { Some(index as u64) } else { None })
+            .collect()
     }
 
     pub fn get_committee_indices(&self) -> Vec<u64> {
@@ -352,12 +367,26 @@ impl<E: EthSpec> AttestationElectra<E> {
         }
     }
 
-    pub fn get_aggregation_bits(&self) -> Vec<u64> {
-        self.aggregation_bits
-            .iter()
-            .enumerate()
-            .filter_map(|(index, bit)| if bit { Some(index as u64) } else { None })
-            .collect()
+    pub fn to_single_attestation_with_attester_index(
+        &self,
+        attester_index: usize
+    ) -> Result<SingleAttestation, Error> {
+        let committee_indices = self.get_committee_indices();
+
+        if committee_indices.len() != 1 {
+            return Err(Error::InvalidCommitteeLength);
+        }
+
+        let committee_index = *committee_indices
+            .first()
+            .ok_or(Error::InvalidCommitteeIndex)?;
+
+        Ok(SingleAttestation {
+            committee_index: committee_index as usize,
+            attester_index,
+            data: self.data.clone(),
+            signature: self.signature.clone()
+        })
     }
 
     pub fn to_single_attestation(
@@ -493,71 +522,6 @@ impl<E: EthSpec> SlotData for AttestationRef<'_, E> {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Serialize,
-    Deserialize,
-    Decode,
-    Encode,
-    TestRandom,
-    Derivative,
-    arbitrary::Arbitrary,
-    TreeHash,
-    PartialEq,
-)]
-pub struct SingleAttestation {
-    pub committee_index: usize,
-    pub attester_index: usize,
-    pub data: AttestationData,
-    pub signature: AggregateSignature,
-}
-
-impl SingleAttestation {
-    pub fn to_attestation<E: EthSpec>(
-        &self,
-        committees: &[BeaconCommittee],
-    ) -> Result<Attestation<E>, Error> {
-        let beacon_committee = committees
-            .get(self.committee_index)
-            .ok_or(Error::InvalidAggregationBit)?;
-        let aggregation_bits = beacon_committee
-            .committee
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &validator_index)| {
-                if self.attester_index == validator_index {
-                    return Some(i);
-                }
-                None
-            })
-            .collect::<Vec<_>>();
-
-        if aggregation_bits.len() != 1 {
-            return Err(Error::InvalidAggregationBit);
-        }
-
-        let aggregation_bit = aggregation_bits.first().unwrap();
-
-        let mut committee_bits: BitVector<E::MaxCommitteesPerSlot> = BitVector::default();
-        committee_bits
-            .set(self.committee_index, true)
-            .map_err(|_| Error::InvalidCommitteeIndex)?;
-
-        let mut aggregation_bits = BitList::with_capacity(beacon_committee.committee.len())
-            .map_err(|_| Error::InvalidCommitteeLength)?;
-
-        aggregation_bits.set(*aggregation_bit, true)?;
-
-        Ok(Attestation::Electra(AttestationElectra {
-            aggregation_bits,
-            committee_bits,
-            data: self.data.clone(),
-            signature: self.signature.clone(),
-        }))
-    }
-}
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq)]
 #[ssz(enum_behaviour = "union")]
 pub enum AttestationOnDisk<E: EthSpec> {
@@ -654,6 +618,99 @@ impl<E: EthSpec> ForkVersionDeserialize for Vec<Attestation<E>> {
                 .map(Attestation::Base)
                 .collect::<Vec<_>>())
         }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Decode,
+    Encode,
+    TestRandom,
+    Derivative,
+    arbitrary::Arbitrary,
+    TreeHash,
+    PartialEq,
+)]
+pub struct SingleAttestation {
+    pub committee_index: usize,
+    pub attester_index: usize,
+    pub data: AttestationData,
+    pub signature: AggregateSignature,
+}
+
+impl SingleAttestation {
+    /// Produces a `SingleAttestation` with empty signature and empty attester index.
+    /// ONLY USE IN ELECTRA
+    pub fn empty_for_signing(
+        committee_index: usize,
+        slot: Slot,
+        beacon_block_root: Hash256,
+        source: Checkpoint,
+        target: Checkpoint,
+    ) -> Self {
+        Self {
+            committee_index,
+            attester_index: 0,
+            data: AttestationData {
+                slot,
+                index: 0,
+                beacon_block_root,
+                source,
+                target,
+            },
+            signature: AggregateSignature::infinity(),
+        }
+    }
+
+    pub fn add_signature(&mut self, signature: &AggregateSignature, committee_position: usize) {
+        self.attester_index = committee_position;
+        self.signature = signature.clone();
+    }
+
+    pub fn to_attestation<E: EthSpec>(
+        &self,
+        committees: &[BeaconCommittee],
+    ) -> Result<Attestation<E>, Error> {
+        let beacon_committee = committees
+            .get(self.committee_index)
+            .ok_or(Error::InvalidAggregationBit)?;
+        let aggregation_bits = beacon_committee
+            .committee
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &validator_index)| {
+                if self.attester_index == validator_index {
+                    return Some(i);
+                }
+                None
+            })
+            .collect::<Vec<_>>();
+
+        if aggregation_bits.len() != 1 {
+            return Err(Error::InvalidAggregationBit);
+        }
+
+        let aggregation_bit = aggregation_bits.first().unwrap();
+
+        let mut committee_bits: BitVector<E::MaxCommitteesPerSlot> = BitVector::default();
+        committee_bits
+            .set(self.committee_index, true)
+            .map_err(|_| Error::InvalidCommitteeIndex)?;
+
+        let mut aggregation_bits = BitList::with_capacity(beacon_committee.committee.len())
+            .map_err(|_| Error::InvalidCommitteeLength)?;
+
+        aggregation_bits.set(*aggregation_bit, true)?;
+
+        Ok(Attestation::Electra(AttestationElectra {
+            aggregation_bits,
+            committee_bits,
+            data: self.data.clone(),
+            signature: self.signature.clone(),
+        }))
     }
 }
 

@@ -30,6 +30,7 @@ pub use reqwest::{StatusCode, Url};
 pub use sensitive_url::{SensitiveError, SensitiveUrl};
 use serde::{de::DeserializeOwned, Serialize};
 use ssz::Encode;
+use types::attestation::SingleAttestation;
 use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
@@ -1316,7 +1317,7 @@ impl BeaconNodeHttpClient {
     /// `POST v2/beacon/pool/attestations`
     pub async fn post_beacon_pool_attestations_v2<E: EthSpec>(
         &self,
-        attestations: &[Attestation<E>],
+        attestations: &[SingleAttestation],
         fork_name: ForkName,
     ) -> Result<(), Error> {
         let mut path = self.eth_path(V2)?;
