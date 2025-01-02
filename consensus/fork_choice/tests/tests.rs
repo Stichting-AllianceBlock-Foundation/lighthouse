@@ -1226,7 +1226,7 @@ async fn progressive_balances_cache_attester_slashing() {
         .apply_blocks_while(|_, state| state.finalized_checkpoint().epoch == 0)
         .await
         .unwrap()
-        // TODO(electra) The shuffling calculations changed between Altair and Electra. Without 
+        // TODO(electra) The shuffling calculations changed between Altair and Electra. Without
         // skipping slots this test breaks. For some reason `fork_name_unchecked` returns Altair
         // initially, even though this test harness should be initialized with the most recent fork, i.e. Electra
         .skip_slots(32)
