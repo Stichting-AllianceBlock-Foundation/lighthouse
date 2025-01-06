@@ -2060,7 +2060,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                 // We insert a VariableList of BlobSidecars into the db, but retrieve
                 // a plain vec since we don't know the length limit of the list without
                 // knowing the slot.
-                // The encoding of a VariableList is same as a regular vec.
+                // The encoding of a VariableList is the same as a regular vec.
                 let blobs: Vec<Arc<BlobSidecar<E>>> = Vec::<_>::from_ssz_bytes(blobs_bytes)?;
                 let blobs = if let Some(max_blobs_per_block) = blobs
                     .first()
