@@ -1,7 +1,7 @@
 use crate::beacon_block_body::{KzgCommitments, BLOB_KZG_COMMITMENTS_INDEX};
 use crate::test_utils::TestRandom;
 use crate::BeaconStateError;
-use crate::{BeaconBlockHeader, EthSpec, Hash256, KzgProofs, SignedBeaconBlockHeader, Slot};
+use crate::{BeaconBlockHeader, Epoch, EthSpec, Hash256, KzgProofs, SignedBeaconBlockHeader, Slot};
 use bls::Signature;
 use derivative::Derivative;
 use kzg::Error as KzgError;
@@ -65,6 +65,10 @@ pub struct DataColumnSidecar<E: EthSpec> {
 impl<E: EthSpec> DataColumnSidecar<E> {
     pub fn slot(&self) -> Slot {
         self.signed_block_header.message.slot
+    }
+
+    pub fn epoch(&self) -> Epoch {
+        self.slot().epoch(E::slots_per_epoch())
     }
 
     pub fn block_root(&self) -> Hash256 {

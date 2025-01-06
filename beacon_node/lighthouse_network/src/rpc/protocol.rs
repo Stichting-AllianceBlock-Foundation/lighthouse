@@ -18,11 +18,11 @@ use tokio_util::{
 };
 use types::{
     BeaconBlock, BeaconBlockAltair, BeaconBlockBase, BeaconBlockCapella, BeaconBlockElectra,
-    BlobSidecar, ChainSpec, DataColumnSidecar, EmptyBlock, EthSpec, ForkContext, ForkName,
-    LightClientBootstrap, LightClientBootstrapAltair, LightClientFinalityUpdate,
+    BlobSidecar, ChainSpec, DataColumnSidecar, EmptyBlock, EthSpec, EthSpecId, ForkContext,
+    ForkName, LightClientBootstrap, LightClientBootstrapAltair, LightClientFinalityUpdate,
     LightClientFinalityUpdateAltair, LightClientOptimisticUpdate,
-    LightClientOptimisticUpdateAltair, LightClientUpdate, MainnetEthSpec, Signature,
-    SignedBeaconBlock,
+    LightClientOptimisticUpdateAltair, LightClientUpdate, MainnetEthSpec, MinimalEthSpec,
+    Signature, SignedBeaconBlock,
 };
 
 // Note: Hardcoding the `EthSpec` type for `SignedBeaconBlock` as min/max values is
@@ -104,6 +104,12 @@ pub static SIGNED_BEACON_BLOCK_ELECTRA_MAX: LazyLock<usize> = LazyLock::new(|| {
     + (<types::KzgCommitment as Encode>::ssz_fixed_len() * MAX_BLOBS_PER_BLOCK_CEILING as usize)
     + ssz::BYTES_PER_LENGTH_OFFSET
 }); // Length offset for the blob commitments field.
+
+pub static BLOB_SIDECAR_SIZE: LazyLock<usize> =
+    LazyLock::new(BlobSidecar::<MainnetEthSpec>::max_size);
+
+pub static BLOB_SIDECAR_SIZE_MINIMAL: LazyLock<usize> =
+    LazyLock::new(BlobSidecar::<MinimalEthSpec>::max_size);
 
 pub static ERROR_TYPE_MIN: LazyLock<usize> = LazyLock::new(|| {
     VariableList::<u8, MaxErrorLen>::from(Vec::<u8>::new())
@@ -668,10 +674,14 @@ impl ProtocolId {
 }
 
 pub fn rpc_blob_limits<E: EthSpec>() -> RpcLimits {
-    RpcLimits::new(
-        BlobSidecar::<E>::empty().as_ssz_bytes().len(),
-        BlobSidecar::<E>::max_size(),
-    )
+    match E::spec_name() {
+        EthSpecId::Minimal => {
+            RpcLimits::new(*BLOB_SIDECAR_SIZE_MINIMAL, *BLOB_SIDECAR_SIZE_MINIMAL)
+        }
+        EthSpecId::Mainnet | EthSpecId::Gnosis => {
+            RpcLimits::new(*BLOB_SIDECAR_SIZE, *BLOB_SIDECAR_SIZE)
+        }
+    }
 }
 
 pub fn rpc_data_column_limits<E: EthSpec>() -> RpcLimits {
@@ -791,7 +801,7 @@ impl<E: EthSpec> RequestType<E> {
             RequestType::LightClientBootstrap(_) => 1,
             RequestType::LightClientOptimisticUpdate => 1,
             RequestType::LightClientFinalityUpdate => 1,
-            RequestType::LightClientUpdatesByRange(req) => req.max_requested(),
+            RequestType::LightClientUpdatesByRange(req) => req.count,
         }
     }
 

@@ -59,6 +59,7 @@ pub enum Error {
     UnknownValidator(usize),
     UnableToDetermineProducer,
     InvalidBitfield,
+    EmptyCommittee,
     ValidatorIsWithdrawable,
     ValidatorIsInactive {
         val_index: usize,
@@ -155,7 +156,6 @@ pub enum Error {
         current_fork: ForkName,
     },
     TotalActiveBalanceDiffUninitialized,
-    MissingImmutableValidator(usize),
     IndexNotSupported(usize),
     InvalidFlagIndex(usize),
     MerkleTreeError(merkle_proof::MerkleTreeError),
@@ -510,7 +510,7 @@ where
     #[compare_fields(as_iter)]
     #[test_random(default)]
     #[superstruct(only(Electra))]
-    pub pending_balance_deposits: List<PendingBalanceDeposit, E::PendingBalanceDepositsLimit>,
+    pub pending_deposits: List<PendingDeposit, E::PendingDepositsLimit>,
     #[compare_fields(as_iter)]
     #[test_random(default)]
     #[superstruct(only(Electra))]
@@ -1548,19 +1548,23 @@ impl<E: EthSpec> BeaconState<E> {
             .ok_or(Error::UnknownValidator(validator_index))
     }
 
+    /// Add a validator to the registry and return the validator index that was allocated for it.
     pub fn add_validator_to_registry(
         &mut self,
-        deposit_data: &DepositData,
+        pubkey: PublicKeyBytes,
+        withdrawal_credentials: Hash256,
+        amount: u64,
         spec: &ChainSpec,
-    ) -> Result<(), Error> {
-        let fork = self.fork_name_unchecked();
-        let amount = if fork.electra_enabled() {
-            0
-        } else {
-            deposit_data.amount
-        };
-        self.validators_mut()
-            .push(Validator::from_deposit(deposit_data, amount, fork, spec))?;
+    ) -> Result<usize, Error> {
+        let index = self.validators().len();
+        let fork_name = self.fork_name_unchecked();
+        self.validators_mut().push(Validator::from_deposit(
+            pubkey,
+            withdrawal_credentials,
+            amount,
+            fork_name,
+            spec,
+        ))?;
         self.balances_mut().push(amount)?;
 
         // Altair or later initializations.
@@ -1574,7 +1578,20 @@ impl<E: EthSpec> BeaconState<E> {
             inactivity_scores.push(0)?;
         }
 
-        Ok(())
+        // Keep the pubkey cache up to date if it was up to date prior to this call.
+        //
+        // Doing this here while we know the pubkey and index is marginally quicker than doing it in
+        // a call to `update_pubkey_cache` later because we don't need to index into the validators
+        // tree again.
+        let pubkey_cache = self.pubkey_cache_mut();
+        if pubkey_cache.len() == index {
+            let success = pubkey_cache.insert(pubkey, index);
+            if !success {
+                return Err(Error::PubkeyCacheInconsistent);
+            }
+        }
+
+        Ok(index)
     }
 
     /// Safe copy-on-write accessor for the `validators` list.
@@ -1779,19 +1796,6 @@ impl<E: EthSpec> BeaconState<E> {
         } else {
             Err(BeaconStateError::EpochOutOfBounds)
         }
-    }
-
-    /// Get the number of outstanding deposits.
-    ///
-    /// Returns `Err` if the state is invalid.
-    pub fn get_outstanding_deposit_len(&self) -> Result<u64, Error> {
-        self.eth1_data()
-            .deposit_count
-            .checked_sub(self.eth1_deposit_index())
-            .ok_or(Error::InvalidDepositState {
-                deposit_count: self.eth1_data().deposit_count,
-                deposit_index: self.eth1_deposit_index(),
-            })
     }
 
     /// Build all caches (except the tree hash cache), if they need to be built.
@@ -2150,27 +2154,6 @@ impl<E: EthSpec> BeaconState<E> {
             .map_err(Into::into)
     }
 
-    /// Get active balance for the given `validator_index`.
-    pub fn get_active_balance(
-        &self,
-        validator_index: usize,
-        spec: &ChainSpec,
-        current_fork: ForkName,
-    ) -> Result<u64, Error> {
-        let max_effective_balance = self
-            .validators()
-            .get(validator_index)
-            .map(|validator| validator.get_max_effective_balance(spec, current_fork))
-            .ok_or(Error::UnknownValidator(validator_index))?;
-        Ok(std::cmp::min(
-            *self
-                .balances()
-                .get(validator_index)
-                .ok_or(Error::UnknownValidator(validator_index))?,
-            max_effective_balance,
-        ))
-    }
-
     pub fn get_pending_balance_to_withdraw(&self, validator_index: usize) -> Result<u64, Error> {
         let mut pending_balance = 0;
         for withdrawal in self
@@ -2197,40 +2180,16 @@ impl<E: EthSpec> BeaconState<E> {
         if *balance > spec.min_activation_balance {
             let excess_balance = balance.safe_sub(spec.min_activation_balance)?;
             *balance = spec.min_activation_balance;
-            self.pending_balance_deposits_mut()?
-                .push(PendingBalanceDeposit {
-                    index: validator_index as u64,
-                    amount: excess_balance,
-                })?;
+            let validator = self.get_validator(validator_index)?.clone();
+            self.pending_deposits_mut()?.push(PendingDeposit {
+                pubkey: validator.pubkey,
+                withdrawal_credentials: validator.withdrawal_credentials,
+                amount: excess_balance,
+                signature: Signature::infinity()?.into(),
+                slot: spec.genesis_slot,
+            })?;
         }
         Ok(())
-    }
-
-    pub fn queue_entire_balance_and_reset_validator(
-        &mut self,
-        validator_index: usize,
-        spec: &ChainSpec,
-    ) -> Result<(), Error> {
-        let balance = self
-            .balances_mut()
-            .get_mut(validator_index)
-            .ok_or(Error::UnknownValidator(validator_index))?;
-        let balance_copy = *balance;
-        *balance = 0_u64;
-
-        let validator = self
-            .validators_mut()
-            .get_mut(validator_index)
-            .ok_or(Error::UnknownValidator(validator_index))?;
-        validator.effective_balance = 0;
-        validator.activation_eligibility_epoch = spec.far_future_epoch;
-
-        self.pending_balance_deposits_mut()?
-            .push(PendingBalanceDeposit {
-                index: validator_index as u64,
-                amount: balance_copy,
-            })
-            .map_err(Into::into)
     }
 
     /// Change the withdrawal prefix of the given `validator_index` to the compounding withdrawal validator prefix.
@@ -2243,12 +2202,10 @@ impl<E: EthSpec> BeaconState<E> {
             .validators_mut()
             .get_mut(validator_index)
             .ok_or(Error::UnknownValidator(validator_index))?;
-        if validator.has_eth1_withdrawal_credential(spec) {
-            AsMut::<[u8; 32]>::as_mut(&mut validator.withdrawal_credentials)[0] =
-                spec.compounding_withdrawal_prefix_byte;
+        AsMut::<[u8; 32]>::as_mut(&mut validator.withdrawal_credentials)[0] =
+            spec.compounding_withdrawal_prefix_byte;
 
-            self.queue_excess_active_balance(validator_index, spec)?;
-        }
+        self.queue_excess_active_balance(validator_index, spec)?;
         Ok(())
     }
 
@@ -2506,33 +2463,64 @@ impl<E: EthSpec> BeaconState<E> {
         Ok(())
     }
 
-    pub fn compute_merkle_proof(&self, generalized_index: usize) -> Result<Vec<Hash256>, Error> {
-        // 1. Convert generalized index to field index.
-        let field_index = match generalized_index {
+    pub fn compute_current_sync_committee_proof(&self) -> Result<Vec<Hash256>, Error> {
+        // Sync committees are top-level fields, subtract off the generalized indices
+        // for the internal nodes. Result should be 22 or 23, the field offset of the committee
+        // in the `BeaconState`:
+        // https://github.com/ethereum/consensus-specs/blob/dev/specs/altair/beacon-chain.md#beaconstate
+        let field_index = if self.fork_name_unchecked().electra_enabled() {
+            light_client_update::CURRENT_SYNC_COMMITTEE_INDEX_ELECTRA
+        } else {
             light_client_update::CURRENT_SYNC_COMMITTEE_INDEX
-            | light_client_update::NEXT_SYNC_COMMITTEE_INDEX => {
-                // Sync committees are top-level fields, subtract off the generalized indices
-                // for the internal nodes. Result should be 22 or 23, the field offset of the committee
-                // in the `BeaconState`:
-                // https://github.com/ethereum/consensus-specs/blob/dev/specs/altair/beacon-chain.md#beaconstate
-                generalized_index
-                    .checked_sub(self.num_fields_pow2())
-                    .ok_or(Error::IndexNotSupported(generalized_index))?
-            }
-            light_client_update::FINALIZED_ROOT_INDEX => {
-                // Finalized root is the right child of `finalized_checkpoint`, divide by two to get
-                // the generalized index of `state.finalized_checkpoint`.
-                let finalized_checkpoint_generalized_index = generalized_index / 2;
-                // Subtract off the internal nodes. Result should be 105/2 - 32 = 20 which matches
-                // position of `finalized_checkpoint` in `BeaconState`.
-                finalized_checkpoint_generalized_index
-                    .checked_sub(self.num_fields_pow2())
-                    .ok_or(Error::IndexNotSupported(generalized_index))?
-            }
-            _ => return Err(Error::IndexNotSupported(generalized_index)),
         };
+        let leaves = self.get_beacon_state_leaves();
+        self.generate_proof(field_index, &leaves)
+    }
 
-        // 2. Get all `BeaconState` leaves.
+    pub fn compute_next_sync_committee_proof(&self) -> Result<Vec<Hash256>, Error> {
+        // Sync committees are top-level fields, subtract off the generalized indices
+        // for the internal nodes. Result should be 22 or 23, the field offset of the committee
+        // in the `BeaconState`:
+        // https://github.com/ethereum/consensus-specs/blob/dev/specs/altair/beacon-chain.md#beaconstate
+        let field_index = if self.fork_name_unchecked().electra_enabled() {
+            light_client_update::NEXT_SYNC_COMMITTEE_INDEX_ELECTRA
+        } else {
+            light_client_update::NEXT_SYNC_COMMITTEE_INDEX
+        };
+        let leaves = self.get_beacon_state_leaves();
+        self.generate_proof(field_index, &leaves)
+    }
+
+    pub fn compute_finalized_root_proof(&self) -> Result<Vec<Hash256>, Error> {
+        // Finalized root is the right child of `finalized_checkpoint`, divide by two to get
+        // the generalized index of `state.finalized_checkpoint`.
+        let field_index = if self.fork_name_unchecked().electra_enabled() {
+            // Index should be 169/2 - 64 = 20 which matches the position
+            // of `finalized_checkpoint` in `BeaconState`
+            light_client_update::FINALIZED_ROOT_INDEX_ELECTRA
+        } else {
+            // Index should be 105/2 - 32 = 20 which matches the position
+            // of `finalized_checkpoint` in `BeaconState`
+            light_client_update::FINALIZED_ROOT_INDEX
+        };
+        let leaves = self.get_beacon_state_leaves();
+        let mut proof = self.generate_proof(field_index, &leaves)?;
+        proof.insert(0, self.finalized_checkpoint().epoch.tree_hash_root());
+        Ok(proof)
+    }
+
+    fn generate_proof(
+        &self,
+        field_index: usize,
+        leaves: &[Hash256],
+    ) -> Result<Vec<Hash256>, Error> {
+        let depth = self.num_fields_pow2().ilog2() as usize;
+        let tree = merkle_proof::MerkleTree::create(leaves, depth);
+        let (_, proof) = tree.generate_proof(field_index, depth)?;
+        Ok(proof)
+    }
+
+    fn get_beacon_state_leaves(&self) -> Vec<Hash256> {
         let mut leaves = vec![];
         #[allow(clippy::arithmetic_side_effects)]
         match self {
@@ -2568,18 +2556,7 @@ impl<E: EthSpec> BeaconState<E> {
             }
         };
 
-        // 3. Make deposit tree.
-        // Use the depth of the `BeaconState` fields (i.e. `log2(32) = 5`).
-        let depth = light_client_update::CURRENT_SYNC_COMMITTEE_PROOF_LEN;
-        let tree = merkle_proof::MerkleTree::create(&leaves, depth);
-        let (_, mut proof) = tree.generate_proof(field_index, depth)?;
-
-        // 4. If we're proving the finalized root, patch in the finalized epoch to complete the proof.
-        if generalized_index == light_client_update::FINALIZED_ROOT_INDEX {
-            proof.insert(0, self.finalized_checkpoint().epoch.tree_hash_root());
-        }
-
-        Ok(proof)
+        leaves
     }
 }
 

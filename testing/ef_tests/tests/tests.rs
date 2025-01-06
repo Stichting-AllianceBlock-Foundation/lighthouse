@@ -243,8 +243,7 @@ mod ssz_static {
     use types::historical_summary::HistoricalSummary;
     use types::{
         AttesterSlashingBase, AttesterSlashingElectra, ConsolidationRequest, DepositRequest,
-        LightClientBootstrapAltair, PendingBalanceDeposit, PendingPartialWithdrawal,
-        WithdrawalRequest, *,
+        LightClientBootstrapAltair, PendingDeposit, PendingPartialWithdrawal, WithdrawalRequest, *,
     };
 
     ssz_static_test!(attestation_data, AttestationData);
@@ -396,11 +395,10 @@ mod ssz_static {
             .run();
         SszStaticHandler::<LightClientBootstrapDeneb<MainnetEthSpec>, MainnetEthSpec>::deneb_only()
             .run();
-        // TODO(electra) re-enable once https://github.com/sigp/lighthouse/issues/6002 is resolved
-        // SszStaticHandler::<LightClientBootstrapElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only()
-        //     .run();
-        // SszStaticHandler::<LightClientBootstrapElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only()
-        //     .run();
+        SszStaticHandler::<LightClientBootstrapElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only()
+            .run();
+        SszStaticHandler::<LightClientBootstrapElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only()
+            .run();
     }
 
     // LightClientHeader has no internal indicator of which fork it is for, so we test it separately.
@@ -476,13 +474,12 @@ mod ssz_static {
         SszStaticHandler::<LightClientFinalityUpdateDeneb<MainnetEthSpec>, MainnetEthSpec>::deneb_only(
         )
             .run();
-        // TODO(electra) re-enable once https://github.com/sigp/lighthouse/issues/6002 is resolved
-        // SszStaticHandler::<LightClientFinalityUpdateElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only(
-        // )
-        //     .run();
-        // SszStaticHandler::<LightClientFinalityUpdateElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only(
-        // )
-        //     .run();
+        SszStaticHandler::<LightClientFinalityUpdateElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only(
+        )
+            .run();
+        SszStaticHandler::<LightClientFinalityUpdateElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only(
+        )
+            .run();
     }
 
     // LightClientUpdate has no internal indicator of which fork it is for, so we test it separately.
@@ -506,13 +503,12 @@ mod ssz_static {
             .run();
         SszStaticHandler::<LightClientUpdateDeneb<MainnetEthSpec>, MainnetEthSpec>::deneb_only()
             .run();
-        // TODO(electra) re-enable once https://github.com/sigp/lighthouse/issues/6002 is resolved
-        // SszStaticHandler::<LightClientUpdateElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only(
-        // )
-        // .run();
-        // SszStaticHandler::<LightClientUpdateElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only(
-        // )
-        // .run();
+        SszStaticHandler::<LightClientUpdateElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only(
+        )
+        .run();
+        SszStaticHandler::<LightClientUpdateElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only(
+        )
+        .run();
     }
 
     #[test]
@@ -664,8 +660,8 @@ mod ssz_static {
 
     #[test]
     fn pending_balance_deposit() {
-        SszStaticHandler::<PendingBalanceDeposit, MinimalEthSpec>::electra_and_later().run();
-        SszStaticHandler::<PendingBalanceDeposit, MainnetEthSpec>::electra_and_later().run();
+        SszStaticHandler::<PendingDeposit, MinimalEthSpec>::electra_and_later().run();
+        SszStaticHandler::<PendingDeposit, MainnetEthSpec>::electra_and_later().run();
     }
 
     #[test]
@@ -922,8 +918,13 @@ fn kzg_recover_cells_and_proofs() {
 }
 
 #[test]
-fn merkle_proof_validity() {
-    MerkleProofValidityHandler::<MainnetEthSpec>::default().run();
+fn beacon_state_merkle_proof_validity() {
+    BeaconStateMerkleProofValidityHandler::<MainnetEthSpec>::default().run();
+}
+
+#[test]
+fn beacon_block_body_merkle_proof_validity() {
+    BeaconBlockBodyMerkleProofValidityHandler::<MainnetEthSpec>::default().run();
 }
 
 #[test]

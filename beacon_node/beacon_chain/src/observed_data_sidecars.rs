@@ -150,6 +150,31 @@ impl<T: ObservableDataSidecar> ObservedDataSidecars<T> {
     }
 }
 
+/// Abstraction to control "observation" of gossip messages (currently just blobs and data columns).
+///
+/// If a type returns `false` for `observe` then the message will not be immediately added to its
+/// respective gossip observation cache. Unobserved messages should usually be observed later.
+pub trait ObservationStrategy {
+    fn observe() -> bool;
+}
+
+/// Type for messages that are observed immediately.
+pub struct Observe;
+/// Type for messages that have not been observed.
+pub struct DoNotObserve;
+
+impl ObservationStrategy for Observe {
+    fn observe() -> bool {
+        true
+    }
+}
+
+impl ObservationStrategy for DoNotObserve {
+    fn observe() -> bool {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,7 +335,7 @@ mod tests {
     #[test]
     fn simple_observations() {
         let spec = Arc::new(test_spec::<E>());
-        let mut cache = ObservedDataSidecars::<BlobSidecar<E>>::new(spec);
+        let mut cache = ObservedDataSidecars::<BlobSidecar<E>>::new(spec.clone());
 
         // Slot 0, index 0
         let proposer_index_a = 420;

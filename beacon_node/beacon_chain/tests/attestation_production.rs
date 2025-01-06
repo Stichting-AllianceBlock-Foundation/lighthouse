@@ -70,12 +70,12 @@ async fn produces_attestations_from_attestation_simulator_service() {
     }
 
     // Compare the prometheus metrics that evaluates the performance of the unaggregated attestations
-    let hit_prometheus_metrics = vec![
+    let hit_prometheus_metrics = [
         metrics::VALIDATOR_MONITOR_ATTESTATION_SIMULATOR_HEAD_ATTESTER_HIT_TOTAL,
         metrics::VALIDATOR_MONITOR_ATTESTATION_SIMULATOR_TARGET_ATTESTER_HIT_TOTAL,
         metrics::VALIDATOR_MONITOR_ATTESTATION_SIMULATOR_SOURCE_ATTESTER_HIT_TOTAL,
     ];
-    let miss_prometheus_metrics = vec![
+    let miss_prometheus_metrics = [
         metrics::VALIDATOR_MONITOR_ATTESTATION_SIMULATOR_HEAD_ATTESTER_MISS_TOTAL,
         metrics::VALIDATOR_MONITOR_ATTESTATION_SIMULATOR_TARGET_ATTESTER_MISS_TOTAL,
         metrics::VALIDATOR_MONITOR_ATTESTATION_SIMULATOR_SOURCE_ATTESTER_MISS_TOTAL,
@@ -86,7 +86,7 @@ async fn produces_attestations_from_attestation_simulator_service() {
     let expected_miss_metrics_count = 0;
     let expected_hit_metrics_count =
         num_blocks_produced - UNAGGREGATED_ATTESTATION_LAG_SLOTS as u64;
-    lighthouse_metrics::gather().iter().for_each(|mf| {
+    metrics::gather().iter().for_each(|mf| {
         if hit_prometheus_metrics.contains(&mf.get_name()) {
             assert_eq!(
                 mf.get_metric()[0].get_counter().get_value() as u64,
