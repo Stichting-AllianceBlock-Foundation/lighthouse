@@ -256,7 +256,10 @@ mod tests {
         let peer_id = PeerId::random();
         let mut rng = XorShiftRng::from_seed([42; 16]);
         let blocks = (0..4)
-            .map(|_| generate_rand_block_and_blobs::<E>(ForkName::Base, NumBlobs::None, &mut rng).0)
+            .map(|_| {
+                generate_rand_block_and_blobs::<E>(ForkName::Base, NumBlobs::None, &mut rng, &spec)
+                    .0
+            })
             .collect::<Vec<_>>();
         let max_len = spec.max_blobs_per_block(blocks.first().unwrap().epoch()) as usize;
         let mut info =
@@ -281,7 +284,13 @@ mod tests {
         let blocks = (0..4)
             .map(|_| {
                 // Always generate some blobs.
-                generate_rand_block_and_blobs::<E>(ForkName::Deneb, NumBlobs::Number(3), &mut rng).0
+                generate_rand_block_and_blobs::<E>(
+                    ForkName::Deneb,
+                    NumBlobs::Number(3),
+                    &mut rng,
+                    &spec,
+                )
+                .0
             })
             .collect::<Vec<_>>();
         let max_len = spec.max_blobs_per_block(blocks.first().unwrap().epoch()) as usize;

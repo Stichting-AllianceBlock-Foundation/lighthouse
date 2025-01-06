@@ -606,14 +606,15 @@ impl ChainSpec {
         }
     }
 
-    /// Returns the deneb preset value if peerdas epoch hasn't hit.
-    /// Otherwise, returns the value obtained from the config.yaml.
+    /// Return the value of `MAX_BLOBS_PER_BLOCK` appropriate for the fork at `epoch`.
     pub fn max_blobs_per_block(&self, epoch: Epoch) -> u64 {
-        if self.is_peer_das_enabled_for_epoch(epoch) {
-            self.max_blobs_per_block
-        } else {
-            default_max_blobs_per_block()
-        }
+        self.max_blobs_per_block_by_fork(self.fork_name_at_epoch(epoch))
+    }
+
+    /// Return the value of `MAX_BLOBS_PER_BLOCK` appropriate for `fork`.
+    pub fn max_blobs_per_block_by_fork(&self, _fork_name: ForkName) -> u64 {
+        // TODO(electra): add Electra blobs per block change here
+        self.max_blobs_per_block
     }
 
     pub fn data_columns_per_subnet(&self) -> usize {
