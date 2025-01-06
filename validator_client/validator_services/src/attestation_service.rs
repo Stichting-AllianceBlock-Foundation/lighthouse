@@ -457,11 +457,16 @@ impl<T: SlotClock + 'static, E: EthSpec> AttestationService<T, E> {
                     &[validator_metrics::ATTESTATIONS_HTTP_POST],
                 );
                 if fork_name.electra_enabled() {
-                    let single_attestations = attestations.iter().zip(validator_indices).filter_map(|(a, i)| {
-                        a.to_single_attestation_with_attester_index(*i as usize).ok()
-                    }).collect::<Vec<_>>();
+                    let single_attestations = attestations
+                        .iter()
+                        .zip(validator_indices)
+                        .filter_map(|(a, i)| {
+                            a.to_single_attestation_with_attester_index(*i as usize)
+                                .ok()
+                        })
+                        .collect::<Vec<_>>();
                     beacon_node
-                        .post_beacon_pool_attestations_v2::<E>(&single_attestations, fork_name)
+                        .post_beacon_pool_attestations_v2(&single_attestations, fork_name)
                         .await
                 } else {
                     beacon_node

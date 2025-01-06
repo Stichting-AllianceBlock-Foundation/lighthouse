@@ -100,10 +100,14 @@ fn verify_and_publish_attestation<T: BeaconChainTypes>(
                     attn.data.target.root,
                     attn.data.slot.epoch(T::EthSpec::slots_per_epoch()),
                     |committee_cache, _| {
-                        let committees =
-                            committee_cache.get_beacon_committees_at_slot(attn.data.slot)?;
+                        let committee_index = attn
+                            .committee_index()
+                            .ok_or(BeaconChainError::AttestationCommitteeIndexNotSet)?;
 
-                        let single_attestation = attn.to_single_attestation(&committees)?;
+                        let committee =
+                            committee_cache.get_beacon_committee(attn.data.slot, committee_index);
+
+                        let single_attestation = attn.to_single_attestation(committee)?;
 
                         network_tx
                             .send(NetworkMessage::Publish {
@@ -166,6 +170,7 @@ pub async fn publish_single_attestations<T: BeaconChainTypes>(
     log: Logger,
 ) -> Result<(), warp::Rejection> {
     let mut attestations = vec![];
+
     for single_attestation in single_attestations {
         let attestation = chain.with_committee_cache(
             single_attestation.data.target.root,
@@ -174,10 +179,12 @@ pub async fn publish_single_attestations<T: BeaconChainTypes>(
                 .slot
                 .epoch(T::EthSpec::slots_per_epoch()),
             |committee_cache, _| {
-                let committees =
-                    committee_cache.get_beacon_committees_at_slot(single_attestation.data.slot)?;
+                let committee = committee_cache.get_beacon_committee(
+                    single_attestation.data.slot,
+                    single_attestation.committee_index as u64,
+                );
 
-                let attestation = single_attestation.to_attestation::<T::EthSpec>(&committees)?;
+                let attestation = single_attestation.to_attestation::<T::EthSpec>(committee)?;
 
                 Ok(attestation)
             },

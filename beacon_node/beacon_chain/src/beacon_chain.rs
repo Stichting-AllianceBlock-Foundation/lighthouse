@@ -2038,9 +2038,13 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                             .spec
                             .fork_name_at_slot::<T::EthSpec>(v.attestation().data().slot);
                         if current_fork.electra_enabled() {
-                            event_handler.register(EventKind::SingleAttestation(Box::new(
-                                v.single_attestation(),
-                            )));
+                            // I don't see a situation where this could return None. The upstream unaggregated attestation checks
+                            // should have already verified that this is an attestation with a single committee bit set.
+                            if let Some(single_attestation) = v.single_attestation() {
+                                event_handler.register(EventKind::SingleAttestation(Box::new(
+                                    single_attestation,
+                                )));
+                            }
                         } else {
                             event_handler.register(EventKind::Attestation(Box::new(
                                 v.attestation().clone_as_attestation(),

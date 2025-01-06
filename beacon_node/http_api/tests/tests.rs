@@ -39,8 +39,9 @@ use tokio::time::Duration;
 use tree_hash::TreeHash;
 use types::application_domain::ApplicationDomain;
 use types::{
-    attestation::AttestationBase, AggregateSignature, BitList, Domain, EthSpec, ExecutionBlockHash,
-    Hash256, Keypair, MainnetEthSpec, RelativeEpoch, SelectionProof, SignedRoot, Slot,
+    attestation::AttestationBase, attestation::SingleAttestation, AggregateSignature, BitList,
+    Domain, EthSpec, ExecutionBlockHash, Hash256, Keypair, MainnetEthSpec, RelativeEpoch,
+    SelectionProof, SignedRoot, Slot,
 };
 
 type E = MainnetEthSpec;
@@ -71,6 +72,7 @@ struct ApiTester {
     next_block: PublishBlockRequest<E>,
     reorg_block: PublishBlockRequest<E>,
     attestations: Vec<Attestation<E>>,
+    single_attestations: Vec<SingleAttestation>,
     contribution_and_proofs: Vec<SignedContributionAndProof<E>>,
     attester_slashing: AttesterSlashing<E>,
     proposer_slashing: ProposerSlashing,
@@ -203,6 +205,27 @@ impl ApiTester {
             "precondition: attestations for testing"
         );
 
+        let fork_name = harness
+            .chain
+            .spec
+            .fork_name_at_slot::<E>(harness.chain.slot().unwrap());
+
+        let single_attestations = if fork_name.electra_enabled() {
+            harness
+                .get_single_attestations(
+                    &AttestationStrategy::AllValidators,
+                    &head.beacon_state,
+                    head_state_root,
+                    head.beacon_block_root,
+                    harness.chain.slot().unwrap(),
+                )
+                .into_iter()
+                .flat_map(|vec| vec.into_iter().map(|(attestation, _subnet_id)| attestation))
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+
         let current_epoch = harness
             .chain
             .slot()
@@ -294,6 +317,7 @@ impl ApiTester {
             next_block,
             reorg_block,
             attestations,
+            single_attestations,
             contribution_and_proofs,
             attester_slashing,
             proposer_slashing,
@@ -381,6 +405,7 @@ impl ApiTester {
             next_block,
             reorg_block,
             attestations,
+            single_attestations: vec![],
             contribution_and_proofs: vec![],
             attester_slashing,
             proposer_slashing,
@@ -1801,12 +1826,12 @@ impl ApiTester {
 
     pub async fn test_post_beacon_pool_attestations_valid_v2(mut self) -> Self {
         let fork_name = self
-            .attestations
+            .single_attestations
             .first()
-            .map(|att| self.chain.spec.fork_name_at_slot::<E>(att.data().slot))
+            .map(|att| self.chain.spec.fork_name_at_slot::<E>(att.data.slot))
             .unwrap();
         self.client
-            .post_beacon_pool_attestations_v1(self.attestations.as_slice())
+            .post_beacon_pool_attestations_v2(self.single_attestations.as_slice(), fork_name)
             .await
             .unwrap();
         assert!(
@@ -1855,9 +1880,9 @@ impl ApiTester {
     }
     pub async fn test_post_beacon_pool_attestations_invalid_v2(mut self) -> Self {
         let mut attestations = Vec::new();
-        for attestation in &self.attestations {
+        for attestation in &self.single_attestations {
             let mut invalid_attestation = attestation.clone();
-            invalid_attestation.data_mut().slot += 1;
+            invalid_attestation.data.slot += 1;
 
             // add both to ensure we only fail on invalid attestations
             attestations.push(attestation.clone());
@@ -1872,7 +1897,7 @@ impl ApiTester {
 
         let err_v2 = self
             .client
-            .post_beacon_pool_attestations_v1(attestations.as_slice())
+            .post_beacon_pool_attestations_v2(attestations.as_slice(), fork_name)
             .await
             .unwrap_err();
 

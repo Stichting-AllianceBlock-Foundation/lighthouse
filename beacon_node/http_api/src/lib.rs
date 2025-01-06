@@ -81,12 +81,13 @@ use tokio_stream::{
     StreamExt,
 };
 use types::{
-    fork_versioned_response::EmptyMetadata, Attestation, AttestationData, AttestationShufflingId,
-    AttesterSlashing, BeaconStateError, CommitteeCache, ConfigAndPreset, Epoch, EthSpec, ForkName,
-    ForkVersionedResponse, Hash256, ProposerPreparationData, ProposerSlashing, RelativeEpoch,
-    SignedAggregateAndProof, SignedBlindedBeaconBlock, SignedBlsToExecutionChange,
-    SignedContributionAndProof, SignedValidatorRegistrationData, SignedVoluntaryExit, Slot,
-    SyncCommitteeMessage, SyncContributionData, attestation::SingleAttestation
+    attestation::SingleAttestation, fork_versioned_response::EmptyMetadata, Attestation,
+    AttestationData, AttestationShufflingId, AttesterSlashing, BeaconStateError, CommitteeCache,
+    ConfigAndPreset, Epoch, EthSpec, ForkName, ForkVersionedResponse, Hash256,
+    ProposerPreparationData, ProposerSlashing, RelativeEpoch, SignedAggregateAndProof,
+    SignedBlindedBeaconBlock, SignedBlsToExecutionChange, SignedContributionAndProof,
+    SignedValidatorRegistrationData, SignedVoluntaryExit, Slot, SyncCommitteeMessage,
+    SyncContributionData,
 };
 use validator::pubkey_to_validator_index;
 use version::{
@@ -1879,9 +1880,6 @@ pub fn serve<T: BeaconChainTypes>(
         .and(reprocess_send_filter)
         .and(log_filter.clone())
         .then(
-            // V1 and V2 are identical except V2 has a consensus version header in the request.
-            // We only require this header for SSZ deserialization, which isn't supported for
-            // this endpoint presently.
             |task_spawner: TaskSpawner<T::EthSpec>,
              chain: Arc<BeaconChain<T>>,
              attestations: Vec<SingleAttestation>,

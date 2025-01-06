@@ -668,8 +668,10 @@ pub type CommitteeAttestations<E> = Vec<(Attestation<E>, SubnetId)>;
 pub type HarnessAttestations<E> =
     Vec<(CommitteeAttestations<E>, Option<SignedAggregateAndProof<E>>)>;
 
-pub type HarnessSingleAttestations<E> =
-    Vec<(CommitteeSingleAttestations, Option<SignedAggregateAndProof<E>>)>;
+pub type HarnessSingleAttestations<E> = Vec<(
+    CommitteeSingleAttestations,
+    Option<SignedAggregateAndProof<E>>,
+)>;
 
 pub type HarnessSyncContributions<E> = Vec<(
     Vec<(SyncCommitteeMessage, usize)>,
@@ -1028,6 +1030,7 @@ where
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn produce_single_attestation_for_block(
         &self,
         slot: Slot,
@@ -1038,7 +1041,6 @@ where
         aggregation_bit_index: usize,
         validator_index: usize,
     ) -> Result<SingleAttestation, BeaconChainError> {
-
         let epoch = slot.epoch(E::slots_per_epoch());
 
         if state.slot() > slot {
@@ -1063,7 +1065,7 @@ where
             *state.get_block_root(target_slot)?
         };
 
-        let mut attestation: Attestation<E> = Attestation::empty_for_signing(
+        let attestation: Attestation<E> = Attestation::empty_for_signing(
             index,
             committee_len,
             slot,
@@ -1078,28 +1080,28 @@ where
 
         let attestation = match attestation {
             Attestation::Electra(mut attn) => {
-                attn.aggregation_bits.set(aggregation_bit_index, true).unwrap();
+                attn.aggregation_bits
+                    .set(aggregation_bit_index, true)
+                    .unwrap();
                 attn
-            },
+            }
             Attestation::Base(_) => panic!("MUST BE AN ELECTRA ATTESTATION"),
         };
 
-        let committee = state.get_beacon_committee(slot, index)?;
+        let committee = state.get_beacon_committee(slot, index).unwrap();
 
-        // let committees = state.get_beacon_committees_at_epoch(RelativeEpoch::Current)?;
+        let single_attestation = attestation.to_single_attestation(Some(committee.clone()))?;
 
-        let single_attestation = attestation.to_single_attestation(
-            &vec![committee.clone()]
-        )?;
+        let attestation: Attestation<E> = single_attestation.to_attestation(Some(committee))?;
 
-        let attestation: Attestation<E> = single_attestation.to_attestation(&vec![committee])?;
-
-        assert_eq!(single_attestation.committee_index, attestation.committee_index().unwrap() as usize);
+        assert_eq!(
+            single_attestation.committee_index,
+            attestation.committee_index().unwrap() as usize
+        );
         assert_eq!(single_attestation.attester_index, validator_index);
         // assert_eq!(single_attestation.attester_index, attestation.attester_index());
         Ok(single_attestation)
     }
-
 
     /// Produces an "unaggregated" attestation for the given `slot` and `index` that attests to
     /// `beacon_block_root`. The provided `state` should match the `block.state_root` for the
@@ -1158,7 +1160,7 @@ where
         )?)
     }
 
-     /// A list of attestations for each committee for the given slot.
+    /// A list of attestations for each committee for the given slot.
     ///
     /// The first layer of the Vec is organised per committee. For example, if the return value is
     /// called `all_attestations`, then all attestations in `all_attestations[0]` will be for
@@ -1255,7 +1257,7 @@ where
                                 Cow::Borrowed(state),
                                 state_root,
                                 i,
-                                *validator_index
+                                *validator_index,
                             )
                             .unwrap();
 
@@ -1485,7 +1487,7 @@ where
         )
     }
 
-     /// A list of attestations for each committee for the given slot.
+    /// A list of attestations for each committee for the given slot.
     ///
     /// The first layer of the Vec is organised per committee. For example, if the return value is
     /// called `all_attestations`, then all attestations in `all_attestations[0]` will be for

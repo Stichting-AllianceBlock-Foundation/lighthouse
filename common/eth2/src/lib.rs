@@ -31,12 +31,12 @@ use reqwest_eventsource::{Event, EventSource};
 pub use sensitive_url::{SensitiveError, SensitiveUrl};
 use serde::{de::DeserializeOwned, Serialize};
 use ssz::Encode;
-use types::attestation::SingleAttestation;
 use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 use store::fork_versioned_response::ExecutionOptimisticFinalizedForkVersionedResponse;
+use types::attestation::SingleAttestation;
 
 pub const V1: EndpointVersion = EndpointVersion(1);
 pub const V2: EndpointVersion = EndpointVersion(2);
@@ -1325,7 +1325,7 @@ impl BeaconNodeHttpClient {
     }
 
     /// `POST v2/beacon/pool/attestations`
-    pub async fn post_beacon_pool_attestations_v2<E: EthSpec>(
+    pub async fn post_beacon_pool_attestations_v2(
         &self,
         attestations: &[SingleAttestation],
         fork_name: ForkName,

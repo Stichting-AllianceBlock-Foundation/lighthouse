@@ -31,7 +31,6 @@ fn signed_att(attestation: &AttestationData) -> SignedAttestation {
     SignedAttestation::from_attestation(attestation, DEFAULT_DOMAIN)
 }
 
-
 #[test]
 fn valid_empty_history() {
     StreamTest {

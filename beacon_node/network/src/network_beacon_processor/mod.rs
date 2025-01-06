@@ -103,10 +103,12 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 .slot
                 .epoch(T::EthSpec::slots_per_epoch()),
             |committee_cache, _| {
-                let committees =
-                    committee_cache.get_beacon_committees_at_slot(single_attestation.data.slot)?;
+                let committee = committee_cache.get_beacon_committee(
+                    single_attestation.data.slot,
+                    single_attestation.committee_index as u64,
+                );
 
-                let attestation = single_attestation.to_attestation(&committees)?;
+                let attestation = single_attestation.to_attestation(committee)?;
 
                 Ok(self.send_unaggregated_attestation(
                     message_id.clone(),
