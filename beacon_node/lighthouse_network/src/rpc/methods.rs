@@ -863,3 +863,16 @@ impl slog::KV for StatusMessage {
         slog::Result::Ok(())
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use types::{ForkName, MainnetEthSpec};
+
+    #[test]
+    fn max_blobs_per_block_ceiling() {
+        let spec = MainnetEthSpec::default_spec();
+        let latest_fork = ForkName::latest();
+        assert!(spec.max_blobs_per_block_by_fork(latest_fork) <= MAX_BLOBS_PER_BLOCK_CEILING);
+    }
+}
