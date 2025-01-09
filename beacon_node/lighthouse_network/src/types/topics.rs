@@ -59,11 +59,7 @@ pub fn fork_core_topics<E: EthSpec>(fork_name: &ForkName, spec: &ChainSpec) -> V
         ForkName::Electra => {
             // All of electra blob topics are core topics
             let mut electra_blob_topics = Vec::new();
-<<<<<<< HEAD
-            for i in 0..spec.blob_sidecar_subnet_count {
-=======
             for i in 0..spec.blob_sidecar_subnet_count_electra {
->>>>>>> 21978a8da4ceb5af202b5c75a6a240a7f5469f53
                 electra_blob_topics.push(GossipKind::BlobSidecar(i));
             }
             electra_blob_topics

@@ -264,15 +264,9 @@ pub(crate) fn create_whitelist_filter(
             add(SyncCommitteeMessage(SyncSubnetId::new(id)));
         }
         let blob_subnet_count = if spec.electra_fork_epoch.is_some() {
-<<<<<<< HEAD
-            spec.blob_sidecar_subnet_count
-        } else {
-            spec.blob_sidecar_subnet_count_electra
-=======
             spec.blob_sidecar_subnet_count_electra
         } else {
             spec.blob_sidecar_subnet_count
->>>>>>> 21978a8da4ceb5af202b5c75a6a240a7f5469f53
         };
         for id in 0..blob_subnet_count {
             add(BlobSidecar(id));
