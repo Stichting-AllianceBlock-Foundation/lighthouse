@@ -209,6 +209,11 @@ pub struct ChainSpec {
     pub samples_per_slot: u64,
 
     /*
+     * FOCIL params
+     */
+    pub eip7805_fork_epoch: Option<Epoch>,
+
+    /*
      * Networking
      */
     pub boot_nodes: Vec<String>,
@@ -436,6 +441,20 @@ impl ChainSpec {
     pub fn is_peer_das_scheduled(&self) -> bool {
         self.eip7594_fork_epoch.map_or(false, |eip7594_fork_epoch| {
             eip7594_fork_epoch != self.far_future_epoch
+        })
+    }
+
+    /// Returns true if the given epoch is greater than or equal to the `EIP7805_FORK_EPOCH`.
+    pub fn is_focil_enabled_for_epoch(&self, block_epoch: Epoch) -> bool {
+        self.eip7805_fork_epoch.map_or(false, |eip7805_fork_epoch| {
+            block_epoch >= eip7805_fork_epoch
+        })
+    }
+
+    /// Returns true if `EIP7805_FORK_EPOCH` is set and is not set to `FAR_FUTURE_EPOCH`.
+    pub fn is_focil_scheduled(&self) -> bool {
+        self.eip7805_fork_epoch.map_or(false, |eip7805_fork_epoch| {
+            eip7805_fork_epoch != self.far_future_epoch
         })
     }
 
@@ -828,6 +847,11 @@ impl ChainSpec {
             samples_per_slot: 8,
 
             /*
+             * FOCIL params
+             */
+            eip7805_fork_epoch: None,
+
+            /*
              * Network specific
              */
             boot_nodes: vec![],
@@ -935,6 +959,8 @@ impl ChainSpec {
             .expect("calculation does not overflow"),
             // PeerDAS
             eip7594_fork_epoch: None,
+            // FOCIL
+            eip7805_fork_epoch: None,
             // Other
             network_id: 2, // lighthouse testnet network id
             deposit_chain_id: 5,
@@ -1151,6 +1177,12 @@ impl ChainSpec {
             data_column_sidecar_subnet_count: 128,
             number_of_columns: 128,
             samples_per_slot: 8,
+
+            /*
+             * FOCIL params
+             */
+            eip7805_fork_epoch: None,
+
             /*
              * Network specific
              */
@@ -1281,6 +1313,11 @@ pub struct Config {
     #[serde(serialize_with = "serialize_fork_epoch")]
     #[serde(deserialize_with = "deserialize_fork_epoch")]
     pub eip7594_fork_epoch: Option<MaybeQuoted<Epoch>>,
+
+    #[serde(default)]
+    #[serde(serialize_with = "serialize_fork_epoch")]
+    #[serde(deserialize_with = "deserialize_fork_epoch")]
+    pub eip7805_fork_epoch: Option<MaybeQuoted<Epoch>>,
 
     #[serde(with = "serde_utils::quoted_u64")]
     seconds_per_slot: u64,
@@ -1681,6 +1718,10 @@ impl Config {
                 .eip7594_fork_epoch
                 .map(|epoch| MaybeQuoted { value: epoch }),
 
+            eip7805_fork_epoch: spec
+                .eip7805_fork_epoch
+                .map(|epoch| MaybeQuoted { value: epoch }),
+
             seconds_per_slot: spec.seconds_per_slot,
             seconds_per_eth1_block: spec.seconds_per_eth1_block,
             min_validator_withdrawability_delay: spec.min_validator_withdrawability_delay,
@@ -1761,6 +1802,7 @@ impl Config {
             electra_fork_epoch,
             electra_fork_version,
             eip7594_fork_epoch,
+            eip7805_fork_epoch,
             seconds_per_slot,
             seconds_per_eth1_block,
             min_validator_withdrawability_delay,
@@ -1824,6 +1866,7 @@ impl Config {
             electra_fork_epoch: electra_fork_epoch.map(|q| q.value),
             electra_fork_version,
             eip7594_fork_epoch: eip7594_fork_epoch.map(|q| q.value),
+            eip7805_fork_epoch: eip7805_fork_epoch.map(|q| q.value),
             seconds_per_slot,
             seconds_per_eth1_block,
             min_validator_withdrawability_delay,

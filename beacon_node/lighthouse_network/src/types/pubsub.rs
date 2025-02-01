@@ -9,12 +9,13 @@ use std::sync::Arc;
 use types::{
     Attestation, AttestationBase, AttestationElectra, AttesterSlashing, AttesterSlashingBase,
     AttesterSlashingElectra, BlobSidecar, DataColumnSidecar, DataColumnSubnetId, EthSpec,
-    ForkContext, ForkName, InclusionList, LightClientFinalityUpdate, LightClientOptimisticUpdate,
+    ForkContext, ForkName, LightClientFinalityUpdate, LightClientOptimisticUpdate,
     ProposerSlashing, SignedAggregateAndProof, SignedAggregateAndProofBase,
     SignedAggregateAndProofElectra, SignedBeaconBlock, SignedBeaconBlockAltair,
     SignedBeaconBlockBase, SignedBeaconBlockBellatrix, SignedBeaconBlockCapella,
     SignedBeaconBlockDeneb, SignedBeaconBlockElectra, SignedBlsToExecutionChange,
-    SignedContributionAndProof, SignedVoluntaryExit, SubnetId, SyncCommitteeMessage, SyncSubnetId,
+    SignedContributionAndProof, SignedInclusionList, SignedVoluntaryExit, SubnetId,
+    SyncCommitteeMessage, SyncSubnetId,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,7 +47,7 @@ pub enum PubsubMessage<E: EthSpec> {
     /// Gossipsub message providing notification of a light client optimistic update.
     LightClientOptimisticUpdate(Box<LightClientOptimisticUpdate<E>>),
     /// Gossipsub message providing notification of an inclusion list.
-    InclusionList(Box<InclusionList<E>>),
+    InclusionList(Box<SignedInclusionList<E>>),
 }
 
 // Implements the `DataTransform` trait of gossipsub to employ snappy compression
@@ -394,9 +395,27 @@ impl<E: EthSpec> PubsubMessage<E> {
                         )))
                     }
                     GossipKind::InclusionList => {
-                        let il =
-                            InclusionList::from_ssz_bytes(data).map_err(|e| format!("{:?}", e))?;
-                        Ok(PubsubMessage::InclusionList(Box::new(il)))
+                        match fork_context.from_context_bytes(gossip_topic.fork_digest) {
+                            Some(fork) if fork.electra_enabled() => {
+                                let il = SignedInclusionList::from_ssz_bytes(data)
+                                    .map_err(|e| format!("{:?}", e))?;
+                                let focil_enabled = fork_context.spec.is_focil_enabled_for_epoch(
+                                    il.message.slot.epoch(E::slots_per_epoch()),
+                                );
+                                if focil_enabled {
+                                    Ok(PubsubMessage::InclusionList(Box::new(il)))
+                                } else {
+                                    Err(format!(
+                                        "inclusion_List topic invalid for given fork digest {:?}",
+                                        gossip_topic.fork_digest
+                                    ))
+                                }
+                            }
+                            Some(_) | None => Err(format!(
+                                "inclusion_List topic invalid for given fork digest {:?}",
+                                gossip_topic.fork_digest
+                            )),
+                        }
                     }
                 }
             }

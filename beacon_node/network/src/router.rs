@@ -541,8 +541,20 @@ impl<T: BeaconChainTypes> Router<T> {
                             bls_to_execution_change,
                         ),
                 ),
-            PubsubMessage::InclusionList(_il) => {
-                // TODO(focil)
+            PubsubMessage::InclusionList(inclusion_list) => {
+                trace!(
+                    self.log,
+                    "Received inclusion list";
+                    "peer_id" => %peer_id
+                );
+                self.handle_beacon_processor_send_result(
+                    self.network_beacon_processor.send_gossip_inclusion_list(
+                        message_id,
+                        peer_id,
+                        *inclusion_list,
+                        timestamp_now(),
+                    ),
+                )
             }
         }
     }
