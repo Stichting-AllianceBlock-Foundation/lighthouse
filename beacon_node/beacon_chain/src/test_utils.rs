@@ -1143,6 +1143,49 @@ where
         Ok(single_attestation)
     }
 
+    pub async fn produce_signed_inclusion_list_for_slot(
+        &self,
+        slot: Slot,
+        validator_index: usize,
+        inclusion_list_committee_root: Hash256,
+        state: Cow<'_, BeaconState<E>>,
+    ) -> Result<SignedInclusionList<E>, BeaconChainError> {
+        let epoch = slot.epoch(E::slots_per_epoch());
+        let fork = self.spec.fork_at_epoch(epoch);
+
+        let inclusion_list_transactions = self
+            .chain
+            .produce_inclusion_list(slot)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let inclusion_list = InclusionList {
+            transactions: inclusion_list_transactions,
+            slot,
+            validator_index: validator_index as u64,
+            inclusion_list_committee_root,
+        };
+
+        let signature = {
+            let domain = self.spec.get_domain(
+                epoch,
+                Domain::InclusionListCommittee,
+                &fork,
+                state.genesis_validators_root(),
+            );
+
+            let message = inclusion_list.signing_root(domain);
+
+            self.validator_keypairs[validator_index].sk.sign(message)
+        };
+
+        Ok(SignedInclusionList {
+            message: inclusion_list,
+            signature,
+        })
+    }
+
     /// Produces an "unaggregated" attestation for the given `slot` and `index` that attests to
     /// `beacon_block_root`. The provided `state` should match the `block.state_root` for the
     /// `block` identified by `beacon_block_root`.
@@ -1499,6 +1542,30 @@ where
                     .collect()
             })
             .collect()
+    }
+
+    pub async fn make_signed_inclusion_lists(
+        &self,
+        inclusion_list_committee: InclusionListCommittee<E>,
+        state: &BeaconState<E>,
+        slot: Slot,
+    ) -> Vec<SignedInclusionList<E>> {
+        let mut inclusion_lists = vec![];
+        let il_committee_root = inclusion_list_committee.tree_hash_root();
+        for validator_index in &inclusion_list_committee {
+            inclusion_lists.push(
+                self.produce_signed_inclusion_list_for_slot(
+                    slot,
+                    *validator_index as usize,
+                    il_committee_root,
+                    Cow::Borrowed(state),
+                )
+                .await
+                .unwrap(),
+            );
+        }
+
+        inclusion_lists
     }
 
     /// A list of attestations for each committee for the given slot.

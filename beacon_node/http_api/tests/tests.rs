@@ -6056,6 +6056,21 @@ impl ApiTester {
         self
     }
 
+    pub async fn test_create_inclusion_lists(self) -> Self {
+        let state = self.chain.head_beacon_state_cloned();
+        let slot = self.harness.chain.slot().unwrap();
+        self.harness.extend_to_slot(slot).await;
+        let inclusion_list_committee = state
+            .get_inclusion_list_committee(slot + 1, &self.chain.spec)
+            .unwrap();
+
+        self.harness
+            .make_signed_inclusion_lists(inclusion_list_committee, &state, slot + 1)
+            .await;
+
+        self
+    }
+
     pub async fn test_get_events_electra(self) -> Self {
         let topics = vec![EventTopic::SingleAttestation];
         let mut events_future = self
@@ -7286,5 +7301,19 @@ async fn expected_withdrawals_valid_capella() {
     ApiTester::new_from_config(config)
         .await
         .test_get_expected_withdrawals_capella()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_signed_inclusion_lists() {
+    let mut config = ApiTesterConfig::default();
+    config.spec.altair_fork_epoch = Some(Epoch::new(0));
+    config.spec.bellatrix_fork_epoch = Some(Epoch::new(0));
+    config.spec.capella_fork_epoch = Some(Epoch::new(0));
+    config.spec.deneb_fork_epoch = Some(Epoch::new(0));
+    config.spec.electra_fork_epoch = Some(Epoch::new(0));
+    ApiTester::new_from_config(config)
+        .await
+        .test_create_inclusion_lists()
         .await;
 }

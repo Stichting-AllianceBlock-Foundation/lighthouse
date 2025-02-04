@@ -845,7 +845,9 @@ impl<E: EthSpec> BeaconState<E> {
         let epoch = slot.epoch(E::slots_per_epoch());
         let current_epoch = self.current_epoch();
         let next_epoch = current_epoch.safe_add(1)?;
-        if epoch != current_epoch || epoch != next_epoch {
+
+        // TODO(focil) review this logic
+        if epoch != current_epoch && epoch != next_epoch {
             return Err(Error::SlotOutOfBounds);
         }
 
