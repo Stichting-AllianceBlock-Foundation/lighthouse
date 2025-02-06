@@ -2669,6 +2669,17 @@ impl ApiTester {
         interesting
     }
 
+    pub async fn test_post_validator_duties_inclusion_list(self) -> Self {
+        let current_epoch = self.chain.epoch().unwrap();
+        let slot = self.chain.slot().unwrap();
+        self.harness.extend_to_slot(slot).await;
+        for validator_indices in self.interesting_validator_indices() {
+            let res = self.client.post_validator_duties_inclusion_list(current_epoch, &validator_indices).await.unwrap();
+            println!("{:?}", res);
+        }
+        self
+    }
+
     pub async fn test_get_validator_duties_attester(self) -> Self {
         let current_epoch = self.chain.epoch().unwrap().as_u64();
 
@@ -7315,5 +7326,19 @@ async fn create_signed_inclusion_lists() {
     ApiTester::new_from_config(config)
         .await
         .test_create_inclusion_lists()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_post_validator_duties_inclusion_list () {
+    let mut config = ApiTesterConfig::default();
+    config.spec.altair_fork_epoch = Some(Epoch::new(0));
+    config.spec.bellatrix_fork_epoch = Some(Epoch::new(0));
+    config.spec.capella_fork_epoch = Some(Epoch::new(0));
+    config.spec.deneb_fork_epoch = Some(Epoch::new(0));
+    config.spec.electra_fork_epoch = Some(Epoch::new(0));
+    ApiTester::new_from_config(config)
+        .await
+        .test_post_validator_duties_inclusion_list()
         .await;
 }

@@ -14,9 +14,7 @@ pub fn inclusion_list_duties<T: BeaconChainTypes>(
 ) -> Result<ApiDuties, warp::reject::Rejection> {
     let current_epoch = chain
         .epoch()
-        // TODO(focil) unwrap
-        .unwrap();
-    // .map_err(warp_utils::reject::beacon_chain_error)?;
+        .map_err(warp_utils::reject::unhandled_error)?;
 
     // Determine what the current epoch would be if we fast-forward our system clock by
     // `MAXIMUM_GOSSIP_CLOCK_DISPARITY`.
@@ -37,8 +35,7 @@ pub fn inclusion_list_duties<T: BeaconChainTypes>(
         let head_block_root = chain.canonical_head.cached_head().head_block_root();
         let (duties, dependent_root) = chain
             .validator_inclusion_list_duties(request_indices, request_epoch, head_block_root)
-            // TODO(focil) unwrap
-            .unwrap();
+            .map_err(warp_utils::reject::unhandled_error)?;
         //.map_err(warp_utils::reject::beacon_chain_error)?;
         convert_to_api_response(duties, request_indices, dependent_root, chain)
     } else if request_epoch > current_epoch + 1 {
@@ -77,8 +74,7 @@ fn convert_to_api_response<T: BeaconChainTypes>(
     let usize_indices = indices.iter().map(|i| *i as usize).collect::<Vec<_>>();
     let index_to_pubkey_map = chain
         .validator_pubkey_bytes_many(&usize_indices)
-        // TODO(focil) unwrap
-        .unwrap();
+        .map_err(warp_utils::reject::unhandled_error)?;
     // .map_err(warp_utils::reject::beacon_chain_error)?;
 
     let data = duties

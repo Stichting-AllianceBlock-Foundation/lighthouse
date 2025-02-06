@@ -338,6 +338,10 @@ impl<T: SlotClock + 'static, E: EthSpec> DutiesService<T, E> {
     pub fn inclusion_list_duties(&self, slot: Slot) -> Vec<InclusionListDutyData> {
         let epoch = slot.epoch(E::slots_per_epoch());
 
+        if !self.spec.is_focil_enabled_for_epoch(epoch) {
+            return vec![]
+        }
+
         // Only collect validators that are considered safe in terms of doppelganger protection.
         let signing_pubkeys: HashSet<_> = self
             .validator_store

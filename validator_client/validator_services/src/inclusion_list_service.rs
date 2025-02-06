@@ -159,6 +159,7 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
             .now()
             .ok_or("Unable to determine current slot from clock")
             .map(|slot| slot.epoch(E::slots_per_epoch()));
+
         // TODO(focil) unused variable
         let _current_epoch = current_epoch.map_err(|e| {
             crit!(
