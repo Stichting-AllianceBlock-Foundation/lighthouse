@@ -2675,7 +2675,7 @@ impl ApiTester {
         self.harness.extend_to_slot(slot).await;
         for validator_indices in self.interesting_validator_indices() {
             let res = self.client.post_validator_duties_inclusion_list(current_epoch, &validator_indices).await.unwrap();
-            println!("{:?}", res);
+            println!("{:?}", res)
         }
         self
     }

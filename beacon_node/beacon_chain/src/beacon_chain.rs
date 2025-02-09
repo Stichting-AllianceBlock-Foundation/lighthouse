@@ -1728,10 +1728,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         })?;
         let dependent_root = shuffling_id.shuffling_decision_block;
 
-        let head_beacon_state = self.get_state(&head_block.root, Some(head_block.slot))?;
+        let head_beacon_state = self.get_state(&head_block.state_root, Some(head_block.slot))?;
         let Some(head_beacon_state) = head_beacon_state else {
-            // TODO(focil) missing beacon state
-            println!("WEVE FAILED HERE");
             return Err(Error::MissingBeaconState(head_block.root));
         };
         let duties = validator_indices

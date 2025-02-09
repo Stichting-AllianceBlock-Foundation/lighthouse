@@ -77,7 +77,7 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
         );
 
         let executor = self.context.executor.clone();
-
+        let chain_spec = spec.clone();
         let interval_fut = async move {
             loop {
                 if let Some(duration_to_next_slot) = self.slot_clock.duration_to_next_slot() {
@@ -85,7 +85,7 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
                     sleep(duration_to_next_slot + (slot_duration * 3 / 4)).await;
                     let log = self.context.log();
 
-                    if let Err(e) = self.spawn_inclusion_list_task(slot_duration) {
+                    if let Err(e) = self.spawn_inclusion_list_task(slot_duration, &chain_spec) {
                         crit!(
                             log,
                             "Failed to spawn inclusion list task";
@@ -113,8 +113,12 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
     /// Spawn a new task that downloads, signs and uploads the inclusion lists to the beacon node.
     // TODO(focil) I don't think we need `slot_duration` here, unless we need to make some calculation
     // related to the freeze deadline.
-    fn spawn_inclusion_list_task(&self, _slot_duration: Duration) -> Result<(), String> {
+    fn spawn_inclusion_list_task(&self, _slot_duration: Duration, spec: &ChainSpec) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
+
+        if !spec.is_focil_enabled_for_epoch(slot.epoch(E::slots_per_epoch())) {
+            return Ok(())
+        }
 
         // TODO(focil) unused variable
         let _duration_to_next_slot = self
