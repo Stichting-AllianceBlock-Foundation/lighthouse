@@ -339,7 +339,7 @@ impl<T: SlotClock + 'static, E: EthSpec> DutiesService<T, E> {
         let epoch = slot.epoch(E::slots_per_epoch());
 
         if !self.spec.is_focil_enabled_for_epoch(epoch) {
-            return vec![]
+            return vec![];
         }
 
         // Only collect validators that are considered safe in terms of doppelganger protection.

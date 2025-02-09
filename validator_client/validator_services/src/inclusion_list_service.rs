@@ -113,11 +113,15 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
     /// Spawn a new task that downloads, signs and uploads the inclusion lists to the beacon node.
     // TODO(focil) I don't think we need `slot_duration` here, unless we need to make some calculation
     // related to the freeze deadline.
-    fn spawn_inclusion_list_task(&self, _slot_duration: Duration, spec: &ChainSpec) -> Result<(), String> {
+    fn spawn_inclusion_list_task(
+        &self,
+        _slot_duration: Duration,
+        spec: &ChainSpec,
+    ) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
         if !spec.is_focil_enabled_for_epoch(slot.epoch(E::slots_per_epoch())) {
-            return Ok(())
+            return Ok(());
         }
 
         // TODO(focil) unused variable

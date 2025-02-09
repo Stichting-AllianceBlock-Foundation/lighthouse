@@ -2674,7 +2674,11 @@ impl ApiTester {
         let slot = self.chain.slot().unwrap();
         self.harness.extend_to_slot(slot).await;
         for validator_indices in self.interesting_validator_indices() {
-            let res = self.client.post_validator_duties_inclusion_list(current_epoch, &validator_indices).await.unwrap();
+            let res = self
+                .client
+                .post_validator_duties_inclusion_list(current_epoch, &validator_indices)
+                .await
+                .unwrap();
             println!("{:?}", res)
         }
         self
@@ -7330,7 +7334,7 @@ async fn create_signed_inclusion_lists() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_post_validator_duties_inclusion_list () {
+async fn test_post_validator_duties_inclusion_list() {
     let mut config = ApiTesterConfig::default();
     config.spec.altair_fork_epoch = Some(Epoch::new(0));
     config.spec.bellatrix_fork_epoch = Some(Epoch::new(0));

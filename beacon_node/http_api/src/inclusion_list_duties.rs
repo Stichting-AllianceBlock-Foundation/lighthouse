@@ -12,9 +12,7 @@ pub fn inclusion_list_duties<T: BeaconChainTypes>(
     request_indices: &[u64],
     chain: &BeaconChain<T>,
 ) -> Result<ApiDuties, warp::reject::Rejection> {
-    let current_epoch = chain
-        .epoch()
-        .map_err(warp_utils::reject::unhandled_error)?;
+    let current_epoch = chain.epoch().map_err(warp_utils::reject::unhandled_error)?;
 
     // Determine what the current epoch would be if we fast-forward our system clock by
     // `MAXIMUM_GOSSIP_CLOCK_DISPARITY`.
