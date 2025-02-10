@@ -118,9 +118,9 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
         _slot_duration: Duration,
         spec: &ChainSpec,
     ) -> Result<(), String> {
-        let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
+        let next_slot = self.slot_clock.now().ok_or("Failed to read slot clock")? + 1;
 
-        if !spec.is_focil_enabled_for_epoch(slot.epoch(E::slots_per_epoch())) {
+        if !spec.is_focil_enabled_for_epoch(next_slot.epoch(E::slots_per_epoch())) {
             return Ok(());
         }
 
@@ -130,10 +130,10 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
             .duration_to_next_slot()
             .ok_or("Unable to determine duration to next slot")?;
 
-        let inclusion_list_duties = self.duties_service.inclusion_list_duties(slot);
+        let inclusion_list_duties = self.duties_service.inclusion_list_duties(next_slot);
         self.inner.context.executor.spawn_ignoring_error(
             self.clone()
-                .produce_and_publish_inclusion_lists(slot, inclusion_list_duties),
+                .produce_and_publish_inclusion_lists(next_slot, inclusion_list_duties),
             "inclusion list publish",
         );
 

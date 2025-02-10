@@ -64,8 +64,14 @@ pub async fn publish_inclusion_lists<T: BeaconChainTypes>(
                         &network_tx,
                         &inner_log,
                     ) {
-                        Ok(()) => PublishInclusionListResult::Success,
-                        Err(e) => PublishInclusionListResult::Failure(e),
+                        Ok(()) => {
+                            debug!(inner_log, "Successfully verified gossip inclusion list");
+                            PublishInclusionListResult::Success
+                        },
+                        Err(e) => {
+                            debug!(inner_log, "Failed to verify gossip inclusion list"; "error" => format!("{:?}", e));
+                            PublishInclusionListResult::Failure(e)
+                        },
                     }
                 })
                 .map(Some)

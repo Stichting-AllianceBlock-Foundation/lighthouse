@@ -103,11 +103,21 @@ impl<T: BeaconChainTypes> PayloadNotifier<T> {
             Some(PayloadVerificationStatus::Irrelevant)
         };
 
-        let inclusion_list_transactions = chain
-            .inclusion_list_cache
-            .read()
-            .get_inclusion_list_transactions(block.slot())
-            .unwrap_or(vec![].into());
+        let inclusion_list_transactions = if chain
+            .spec
+            .is_focil_enabled_for_epoch(block.slot().epoch(T::EthSpec::slots_per_epoch()))
+        {
+            let inclusion_list_transactions = chain
+                .inclusion_list_cache
+                .read()
+                .get_inclusion_list_transactions(block.slot())
+                .unwrap_or(vec![].into());
+
+            debug!(chain.log, "Adding inclusion list transactions in the Payload Notifier"; "count" => inclusion_list_transactions.len());
+            inclusion_list_transactions
+        } else {
+            vec![].into()
+        };
 
         Ok(Self {
             chain,

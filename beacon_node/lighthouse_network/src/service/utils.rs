@@ -257,6 +257,7 @@ pub(crate) fn create_whitelist_filter(
         add(BlsToExecutionChange);
         add(LightClientFinalityUpdate);
         add(LightClientOptimisticUpdate);
+        add(InclusionList);
         for id in 0..spec.attestation_subnet_count {
             add(Attestation(SubnetId::new(id)));
         }

@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
-
 use super::{EthSpec, InclusionListTransactions, SignedInclusionList, Slot, Transaction};
+use slog::{debug, Logger};
+use std::collections::{HashMap, HashSet};
 
 /// Map from slot to inclusion lists
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -34,7 +34,7 @@ impl<E: EthSpec> InclusionListCache<E> {
         self.inner_map.remove(&slot);
     }
 
-    pub fn on_inclusion_list(&mut self, inclusion_list: SignedInclusionList<E>) {
+    pub fn on_inclusion_list(&mut self, inclusion_list: SignedInclusionList<E>, log: &Logger) {
         let Some(inner) = self.inner_map.get_mut(&inclusion_list.message.slot) else {
             return;
         };
@@ -75,6 +75,11 @@ impl<E: EthSpec> InclusionListCache<E> {
             .inclusion_lists_seen
             .insert(inclusion_list.message.validator_index);
         inner.inclusion_lists.insert(inclusion_list);
+
+        debug!(
+            log,
+            "Successfully added inclusion list transactions to the cache"
+        );
     }
 
     pub fn get_inclusion_list_transactions(

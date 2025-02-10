@@ -42,6 +42,8 @@ pub const LIGHT_CLIENT_GOSSIP_TOPICS: [GossipKind; 2] = [
     GossipKind::LightClientOptimisticUpdate,
 ];
 
+pub const FULU_CORE_TOPICS: [GossipKind; 1] = [GossipKind::InclusionList];
+
 /// Returns the core topics associated with each fork that are new to the previous fork
 pub fn fork_core_topics<E: EthSpec>(fork_name: &ForkName, spec: &ChainSpec) -> Vec<GossipKind> {
     match fork_name {
@@ -63,13 +65,9 @@ pub fn fork_core_topics<E: EthSpec>(fork_name: &ForkName, spec: &ChainSpec) -> V
             for i in 0..spec.blob_sidecar_subnet_count(ForkName::Electra) {
                 electra_blob_topics.push(GossipKind::BlobSidecar(i));
             }
-
-            if spec.is_focil_scheduled() {
-                electra_blob_topics.push(GossipKind::InclusionList)
-            }
             electra_blob_topics
         }
-        ForkName::Fulu => vec![],
+        ForkName::Fulu => FULU_CORE_TOPICS.to_vec(),
     }
 }
 

@@ -2178,6 +2178,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             .await
             .map_err(|e| Error::ExecutionLayerGetInclusionListFailed(Box::new(e)))?;
 
+        debug!(self.log, "Inclusion list fetched from EL"; "tx_count" => inclusion_list.len());
+
         Ok(Some(inclusion_list))
     }
 
@@ -2373,11 +2375,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         })
     }
 
-    /// Accepts some `Attestation` from the network and attempts to verify it, returning `Ok(_)` if
+    /// Accepts some `inclusion_list` from the network and attempts to verify it, returning `Ok(_)` if
     /// it is valid to be (re)broadcast on the gossip network.
-    ///
-    /// The attestation must be "unaggregated", that is it must have exactly one
-    /// aggregation bit set.
     pub fn verify_inclusion_list_for_gossip(
         &self,
         inclusion_list: &SignedInclusionList<T::EthSpec>,
@@ -7393,9 +7392,10 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     }
 
     pub fn on_verified_inclusion_list(&self, signed_il: SignedInclusionList<T::EthSpec>) {
+        debug!(self.log, "Adding verified inclusion list to the cache");
         self.inclusion_list_cache
             .write()
-            .on_inclusion_list(signed_il);
+            .on_inclusion_list(signed_il, &self.log);
     }
 
     pub fn metrics(&self) -> BeaconChainMetrics {
