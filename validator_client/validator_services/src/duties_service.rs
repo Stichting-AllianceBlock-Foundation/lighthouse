@@ -129,24 +129,39 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
     duty: &AttesterData,
     validator_store: &ValidatorStore<T, E>,
     spec: &ChainSpec,
+    distributed: bool,
+    beacon_nodes: &Arc<BeaconNodeFallback<T, E>>,
 ) -> Result<Option<SelectionProof>, Error> {
-    let selection_proof = validator_store
-        .produce_selection_proof(duty.pubkey, duty.slot)
-        .await
-        .map_err(Error::FailedToProduceSelectionProof)?;
+    if distributed {
+        // call the middleware for the endpoint /eth/v1/validator/beacon_committee_subscriptions
+        beacon_nodes
+            .first_success(|beacon_node| async move {
+                beacon_node
+                    .post_validator_beacon_committee_subscriptions()
+                    .await
+            })
+            .await
+            .map_err(|e| Error::FailedToProduceSelectionProof(e.to_string()))
+            .map(|_| None)
+    } else {
+        let selection_proof = validator_store
+            .produce_selection_proof(duty.pubkey, duty.slot)
+            .await
+            .map_err(Error::FailedToProduceSelectionProof)?;
 
-    selection_proof
-        .is_aggregator(duty.committee_length as usize, spec)
-        .map_err(Error::InvalidModulo)
-        .map(|is_aggregator| {
-            if is_aggregator {
-                Some(selection_proof)
-            } else {
-                // Don't bother storing the selection proof if the validator isn't an
-                // aggregator, we won't need it.
-                None
-            }
-        })
+        selection_proof
+            .is_aggregator(duty.committee_length as usize, spec)
+            .map_err(Error::InvalidModulo)
+            .map(|is_aggregator| {
+                if is_aggregator {
+                    Some(selection_proof)
+                } else {
+                    // Don't bother storing the selection proof if the validator isn't an
+                    // aggregator, we won't need it.
+                    None
+                }
+            })
+    }
 }
 
 impl DutyAndProof {
@@ -1101,6 +1116,8 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                         &duty,
                         &duties_service.validator_store,
                         &duties_service.spec,
+                        duties_service.distributed,
+                        &duties_service.beacon_nodes,
                     )
                     .await?;
                     Ok((duty, opt_selection_proof))
