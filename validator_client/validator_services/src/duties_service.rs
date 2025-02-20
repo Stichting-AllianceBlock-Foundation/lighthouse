@@ -134,9 +134,7 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
     beacon_nodes: &Arc<BeaconNodeFallback<T, E>>,
 ) -> Result<Option<SelectionProof>, Error> {
     let selection_proof = if distributed {
-        // Call the endpoint /eth/v1/validator/beacon_committee_selections
-        // During the call, we submit a partial selection proof in the data field of the POST HTTP endpoint
-        // The end point (middleware) should return a full selection proof
+        // Submit a partial selection proof in the data field of the POST HTTP endpoint
         let selections = BeaconCommitteeSelection {
             validator_index: duty.validator_index,
             slot: duty.slot,
@@ -146,6 +144,8 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                 .map_err(Error::FailedToProduceSelectionProof)?
                 .into(),
         };
+        // Call the endpoint /eth/v1/validator/beacon_committee_selections
+        // The middleware should return a full selection proof here
         beacon_nodes
             .first_success(|beacon_node| async move {
                 beacon_node
@@ -153,12 +153,12 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                     .await
             })
             .await
-            .map_err(|e| Error::FailedToDownloadAttesters(e.to_string()))?
+            .map_err(Error::FailedToProduceSelectionProof)?
     } else {
         validator_store
             .produce_selection_proof(duty.pubkey, duty.slot)
             .await
-            .map_err(Error::FailedToProduceSelectionProof)?;
+            .map_err(Error::FailedToProduceSelectionProof)?
     };
 
     selection_proof
