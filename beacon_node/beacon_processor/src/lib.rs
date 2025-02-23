@@ -1207,6 +1207,7 @@ impl<E: EthSpec> BeaconProcessor<E> {
                             }
                         // TODO(focil) figure out priority and maybe introduce batching
                         } else if let Some(item) = gossip_inclusion_list_queue.pop() {
+                            Some(item)
                             // Convert any gossip attestations that need to be converted.
                         } else if let Some(item) = attestation_to_convert_queue.pop() {
                             Some(item)
