@@ -6089,8 +6089,10 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     //
                     // This prevents the routine from running during sync.
                     let head_slot = cached_head.head_slot();
-                    if head_slot + T::EthSpec::slots_per_epoch() * PREPARE_PROPOSER_HISTORIC_EPOCHS
-                        < current_slot
+                    if 2 + 2 == 5
+                        && head_slot
+                            + T::EthSpec::slots_per_epoch() * PREPARE_PROPOSER_HISTORIC_EPOCHS
+                            < current_slot
                     {
                         debug!(
                             chain.log,
