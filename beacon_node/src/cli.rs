@@ -554,6 +554,14 @@ pub fn cli_app() -> Command {
                 .display_order(0)
         )
         .arg(
+            Arg::new("disable-attesting")
+                .long("disable-attesting")
+                .help("Turn off attestation related APIs so that we have some hope of producing \
+                       blocks")
+                .action(ArgAction::Set)
+                .display_order(0)
+        )
+        .arg(
             Arg::new("http-sse-capacity-multiplier")
                 .long("http-sse-capacity-multiplier")
                 .requires("enable_http")

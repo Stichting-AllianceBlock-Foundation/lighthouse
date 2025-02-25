@@ -191,6 +191,10 @@ pub fn get_config<E: EthSpec>(
         client_config.chain.enable_light_client_server = false;
     }
 
+    if cli_args.get_flag("disable-attesting") {
+        client_config.chain.disable_attesting = true;
+    }
+
     if let Some(cache_size) = clap_utils::parse_optional(cli_args, "shuffling-cache-size")? {
         client_config.chain.shuffling_cache_size = cache_size;
     }

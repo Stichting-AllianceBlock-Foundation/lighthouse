@@ -2580,6 +2580,16 @@ fn light_client_http_server_disabled() {
 }
 
 #[test]
+fn disable_attesting() {
+    CommandLineTest::new()
+        .flag("disable-attesting", None)
+        .run_with_zero_port()
+        .with_config(|config| {
+            assert!(config.chain.disable_attesting);
+        });
+}
+
+#[test]
 fn gui_flag() {
     CommandLineTest::new()
         .flag("gui", None)
