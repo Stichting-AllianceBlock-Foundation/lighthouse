@@ -589,13 +589,9 @@ impl ProtoArray {
             if let Some(parent_index) = node.parent {
                 if invalidated_indices.contains(&parent_index) {
                     match &node.execution_status {
-                        ExecutionStatus::Valid(hash) => {
-                            return Err(Error::ValidExecutionStatusBecameInvalid {
-                                block_root: node.root,
-                                payload_block_hash: *hash,
-                            })
-                        }
-                        ExecutionStatus::Optimistic(hash) | ExecutionStatus::Invalid(hash) => {
+                        ExecutionStatus::Valid(hash)
+                        | ExecutionStatus::Optimistic(hash)
+                        | ExecutionStatus::Invalid(hash) => {
                             node.execution_status = ExecutionStatus::Invalid(*hash)
                         }
                         ExecutionStatus::Irrelevant(_) => {
