@@ -4163,6 +4163,23 @@ pub fn serve<T: BeaconChainTypes>(
             },
         );
 
+    // POST lighthouse/compaction
+    let post_lighthouse_compaction = warp::path("lighthouse")
+        .and(warp::path("compaction"))
+        .and(warp::path::end())
+        .and(task_spawner_filter.clone())
+        .and(chain_filter.clone())
+        .then(
+            |task_spawner: TaskSpawner<T::EthSpec>, chain: Arc<BeaconChain<T>>| {
+                task_spawner.blocking_json_task(Priority::P0, move || {
+                    chain.manually_compact_database();
+                    Ok(api_types::GenericResponse::from(String::from(
+                        "Triggered manual compaction",
+                    )))
+                })
+            },
+        );
+
     // POST lighthouse/add_peer
     let post_lighthouse_add_peer = warp::path("lighthouse")
         .and(warp::path("add_peer"))
@@ -4968,6 +4985,7 @@ pub fn serve<T: BeaconChainTypes>(
                     .uor(post_lighthouse_ui_validator_metrics)
                     .uor(post_lighthouse_ui_validator_info)
                     .uor(post_lighthouse_finalize)
+                    .uor(post_lighthouse_compaction)
                     .uor(post_lighthouse_add_peer)
                     .recover(warp_utils::reject::handle_rejection),
             ),
