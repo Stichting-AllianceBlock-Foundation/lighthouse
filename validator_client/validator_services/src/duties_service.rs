@@ -162,12 +162,17 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                 }
             })
             .await;
-        response
-            .map_err(|e| {
-                Error::FailedToProduceSelectionProof(ValidatorStoreError::Middleware(e.to_string()))
-            })?
-            .data[0]
-            .clone()
+        SelectionProof::from(
+            response
+                .map_err(|e| {
+                    Error::FailedToProduceSelectionProof(ValidatorStoreError::Middleware(
+                        e.to_string(),
+                    ))
+                })?
+                .data[0]
+                .selection_proof
+                .clone(),
+        )
     } else {
         validator_store
             .produce_selection_proof(duty.pubkey, duty.slot)
