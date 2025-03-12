@@ -135,6 +135,7 @@ pub struct Timeouts {
     pub attestation: Duration,
     pub attester_duties: Duration,
     pub attestation_subscriptions: Duration,
+    pub attestation_aggregators: Duration,
     pub liveness: Duration,
     pub proposal: Duration,
     pub proposer_duties: Duration,
@@ -144,7 +145,6 @@ pub struct Timeouts {
     pub get_debug_beacon_states: Duration,
     pub get_deposit_snapshot: Duration,
     pub get_validator_block: Duration,
-    pub aggregator_duties: Duration,
 }
 
 impl Timeouts {
@@ -153,6 +153,7 @@ impl Timeouts {
             attestation: timeout,
             attester_duties: timeout,
             attestation_subscriptions: timeout,
+            attestation_aggregators: timeout,
             liveness: timeout,
             proposal: timeout,
             proposer_duties: timeout,
@@ -162,7 +163,6 @@ impl Timeouts {
             get_debug_beacon_states: timeout,
             get_deposit_snapshot: timeout,
             get_validator_block: timeout,
-            aggregator_duties: timeout,
         }
     }
 }
@@ -2679,8 +2679,12 @@ impl BeaconNodeHttpClient {
             .push("validator")
             .push("beacon_committee_selections");
 
-        self.post_with_timeout_and_response(path, &selections, self.timeouts.aggregator_duties)
-            .await
+        self.post_with_timeout_and_response(
+            path,
+            &selections,
+            self.timeouts.attestation_aggregators,
+        )
+        .await
     }
 }
 
