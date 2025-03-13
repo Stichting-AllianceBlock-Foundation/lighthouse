@@ -26,7 +26,6 @@ mod tests {
         load_pem_certificate, load_pkcs12_identity, InitializedValidators,
     };
     use lighthouse_validator_store::LighthouseValidatorStore;
-    use logging::test_logger;
     use parking_lot::Mutex;
     use reqwest::Client;
     use serde::Serialize;
@@ -180,14 +179,7 @@ mod tests {
         pub async fn new(network: &str, listen_address: &str, listen_port: u16) -> Self {
             GET_WEB3SIGNER_BIN
                 .get_or_init(|| async {
-                    // Read a Github API token from the environment. This is intended to prevent rate-limits on CI.
-                    // We use a name that is unlikely to accidentally collide with anything the user has configured.
-                    let github_token = env::var("LIGHTHOUSE_GITHUB_TOKEN");
-                    download_binary(
-                        TEMP_DIR.lock().path().to_path_buf(),
-                        github_token.as_deref().unwrap_or(""),
-                    )
-                    .await;
+                    download_binary(TEMP_DIR.lock().path().to_path_buf()).await;
                 })
                 .await;
 
@@ -325,7 +317,6 @@ mod tests {
             using_web3signer: bool,
             spec: Arc<ChainSpec>,
         ) -> Self {
-            let log = test_logger();
             let validator_dir = TempDir::new().unwrap();
 
             let config = initialized_validators::Config::default();
@@ -334,7 +325,6 @@ mod tests {
                 validator_definitions,
                 validator_dir.path().into(),
                 config.clone(),
-                log.clone(),
             )
             .await
             .unwrap();
@@ -349,8 +339,12 @@ mod tests {
             );
             let (runtime_shutdown, exit) = async_channel::bounded(1);
             let (shutdown_tx, _) = futures::channel::mpsc::channel(1);
-            let executor =
-                TaskExecutor::new(Arc::downgrade(&runtime), exit, log.clone(), shutdown_tx);
+            let executor = TaskExecutor::new(
+                Arc::downgrade(&runtime),
+                exit,
+                shutdown_tx,
+                "test".to_string(),
+            );
 
             let slashing_db_path = validator_dir.path().join(SLASHING_PROTECTION_FILENAME);
             let slashing_protection = SlashingDatabase::open_or_create(&slashing_db_path).unwrap();
@@ -365,7 +359,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let validator_store = LighthouseValidatorStore::new(
+            let validator_store = LighthouseValidatorStore::<_, E>::new(
                 initialized_validators,
                 slashing_protection,
                 Hash256::repeat_byte(42),
@@ -374,7 +368,6 @@ mod tests {
                 slot_clock,
                 &config,
                 executor,
-                log.clone(),
             );
 
             Self {
@@ -670,12 +663,12 @@ mod tests {
         .assert_signatures_match("beacon_block_altair", |pubkey, validator_store| {
             let spec = spec.clone();
             async move {
-                let mut altair_block = BeaconBlockAltair::<E>::empty(&spec);
+                let mut altair_block = BeaconBlockAltair::empty(&spec);
                 altair_block.slot = altair_fork_slot;
                 validator_store
                     .sign_block(
                         pubkey,
-                        BeaconBlock::Altair(altair_block).into(),
+                        BeaconBlock::<E>::Altair(altair_block).into(),
                         altair_fork_slot,
                     )
                     .await
@@ -757,12 +750,12 @@ mod tests {
         .assert_signatures_match("beacon_block_bellatrix", |pubkey, validator_store| {
             let spec = spec.clone();
             async move {
-                let mut bellatrix_block = BeaconBlockBellatrix::<E>::empty(&spec);
+                let mut bellatrix_block = BeaconBlockBellatrix::empty(&spec);
                 bellatrix_block.slot = bellatrix_fork_slot;
                 validator_store
                     .sign_block(
                         pubkey,
-                        BeaconBlock::Bellatrix(bellatrix_block).into(),
+                        BeaconBlock::<E>::Bellatrix(bellatrix_block).into(),
                         bellatrix_fork_slot,
                     )
                     .await

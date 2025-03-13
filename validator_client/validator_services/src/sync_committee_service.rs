@@ -87,6 +87,11 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> SyncCommitteeService<S
     }
 
     pub fn start_update_service(self, spec: &ChainSpec) -> Result<(), String> {
+        if self.duties_service.disable_attesting {
+            info!("Sync committee service disabled");
+            return Ok(());
+        }
+
         let slot_duration = Duration::from_secs(spec.seconds_per_slot);
         let duration_to_next_slot = self
             .slot_clock

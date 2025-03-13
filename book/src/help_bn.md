@@ -28,6 +28,8 @@ Options:
           network. Multiaddr is also supported.
       --builder <builder>
           The URL of a service compatible with the MEV-boost API.
+      --builder-disable-ssz
+          Disables sending requests using SSZ over the builder API.
       --builder-fallback-epochs-since-finalization <builder-fallback-epochs-since-finalization>
           If this node is proposing a block and the chain has not finalized
           within this number of epochs, it will NOT query any connected
@@ -116,7 +118,7 @@ Options:
       --epochs-per-blob-prune <EPOCHS>
           The epoch interval with which to prune blobs from Lighthouse's
           database when they are older than the data availability boundary
-          relative to the current epoch. [default: 1]
+          relative to the current epoch. [default: 256]
       --epochs-per-migration <N>
           The number of epochs to wait between running the migration of data
           from the hot DB to the cold DB. Less frequent runs can be useful for
@@ -243,15 +245,11 @@ Options:
       --log-format <FORMAT>
           Specifies the log format used when emitting logs to the terminal.
           [possible values: JSON]
-      --logfile <FILE>
-          File path where the log file will be stored. Once it grows to the
-          value specified in `--logfile-max-size` a new log file is generated
-          where future logs are stored. Once the number of log files exceeds the
-          value specified in `--logfile-max-number` the oldest log file will be
-          overwritten.
       --logfile-debug-level <LEVEL>
           The verbosity level used when emitting logs to the log file. [default:
           debug] [possible values: info, debug, trace, warn, error, crit]
+      --logfile-dir <DIR>
+          Directory path where the log file will be stored
       --logfile-format <FORMAT>
           Specifies the log format used when emitting logs to the logfile.
           [possible values: DEFAULT, JSON]
@@ -384,7 +382,7 @@ Options:
       --slots-per-restore-point <SLOT_COUNT>
           DEPRECATED. This flag has no effect.
       --state-cache-size <STATE_CACHE_SIZE>
-          Specifies the size of the state cache [default: 128]
+          Specifies the size of the state cache [default: 32]
       --suggested-fee-recipient <SUGGESTED-FEE-RECIPIENT>
           Emergency fallback fee recipient for use in case the validator client
           does not have one configured. You should set this flag on the
@@ -515,8 +513,13 @@ Flags:
           all attestations are received for import.
       --light-client-server
           DEPRECATED
-      --log-color
-          Force outputting colors when emitting logs to the terminal.
+      --log-color [<log-color>]
+          Enables/Disables colors for logs in terminal. Set it to false to
+          disable colors. [default: true] [possible values: true, false]
+      --log-extra-info
+          If present, show module,file,line in logs
+      --logfile-color
+          Enables colors in logfile.
       --logfile-compress
           If present, compress old log files. This can help reduce the space
           needed to store old logs.

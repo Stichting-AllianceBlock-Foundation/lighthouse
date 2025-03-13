@@ -5,9 +5,8 @@ use crate::{
     Error as ServerError, CONSENSUS_BLOCK_VALUE_HEADER, CONSENSUS_VERSION_HEADER,
     EXECUTION_PAYLOAD_BLINDED_HEADER, EXECUTION_PAYLOAD_VALUE_HEADER,
 };
-use enr::{CombinedKey, Enr};
+use lighthouse_network::{ConnectionDirection, Enr, Multiaddr, PeerConnectionStatus};
 use mediatype::{names, MediaType, MediaTypeList};
-use multiaddr::Multiaddr;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -579,7 +578,7 @@ pub struct ChainHeadData {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityData {
     pub peer_id: String,
-    pub enr: Enr<CombinedKey>,
+    pub enr: Enr,
     pub p2p_addresses: Vec<Multiaddr>,
     pub discovery_addresses: Vec<Multiaddr>,
     pub metadata: MetaData,
@@ -862,6 +861,19 @@ pub enum PeerState {
     Disconnecting,
 }
 
+impl PeerState {
+    pub fn from_peer_connection_status(status: &PeerConnectionStatus) -> Self {
+        match status {
+            PeerConnectionStatus::Connected { .. } => PeerState::Connected,
+            PeerConnectionStatus::Dialing { .. } => PeerState::Connecting,
+            PeerConnectionStatus::Disconnecting { .. } => PeerState::Disconnecting,
+            PeerConnectionStatus::Disconnected { .. }
+            | PeerConnectionStatus::Banned { .. }
+            | PeerConnectionStatus::Unknown => PeerState::Disconnected,
+        }
+    }
+}
+
 impl FromStr for PeerState {
     type Err = String;
 
@@ -892,6 +904,15 @@ impl fmt::Display for PeerState {
 pub enum PeerDirection {
     Inbound,
     Outbound,
+}
+
+impl PeerDirection {
+    pub fn from_connection_direction(direction: &ConnectionDirection) -> Self {
+        match direction {
+            ConnectionDirection::Incoming => PeerDirection::Inbound,
+            ConnectionDirection::Outgoing => PeerDirection::Outbound,
+        }
+    }
 }
 
 impl FromStr for PeerDirection {

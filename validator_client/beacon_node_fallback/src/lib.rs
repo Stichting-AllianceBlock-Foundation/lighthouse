@@ -353,10 +353,10 @@ impl CandidateBeaconNode {
             );
         } else if beacon_node_spec.fulu_fork_epoch != spec.fulu_fork_epoch {
             warn!(
-                endpoint = %self.beacon_node,
-                endpoint_fulu_fork_epoc = ?beacon_node_spec.fulu_fork_epoch,
-                hint = UPDATE_REQUIRED_LOG_HINT,
-                "Beacon node has mismatched Fulu fork epoch"
+            endpoint = %self.beacon_node,
+            endpoint_fulu_fork_epoch = ?beacon_node_spec.fulu_fork_epoch,
+            hint = UPDATE_REQUIRED_LOG_HINT,
+            "Beacon node has mismatched Fulu fork epoch"
             );
         }
 
@@ -856,7 +856,7 @@ mod tests {
         index: usize,
         spec: &ChainSpec,
     ) -> (MockBeaconNode<E>, CandidateBeaconNode) {
-        let mut mock_beacon_node = MockBeaconNode::new().await;
+        let mut mock_beacon_node = MockBeaconNode::<E>::new().await;
         mock_beacon_node.mock_config_spec(spec);
 
         let beacon_node =

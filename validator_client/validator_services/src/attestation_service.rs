@@ -23,6 +23,7 @@ pub struct AttestationServiceBuilder<S: ValidatorStore, T: SlotClock + 'static> 
     beacon_nodes: Option<Arc<BeaconNodeFallback<T>>>,
     executor: Option<TaskExecutor>,
     chain_spec: Option<Arc<ChainSpec>>,
+    disable: bool,
 }
 
 impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationServiceBuilder<S, T> {
@@ -34,6 +35,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationServiceBuil
             beacon_nodes: None,
             executor: None,
             chain_spec: None,
+            disable: false,
         }
     }
 
@@ -67,6 +69,11 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationServiceBuil
         self
     }
 
+    pub fn disable(mut self, disable: bool) -> Self {
+        self.disable = disable;
+        self
+    }
+
     pub fn build(self) -> Result<AttestationService<S, T>, String> {
         Ok(AttestationService {
             inner: Arc::new(Inner {
@@ -88,6 +95,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationServiceBuil
                 chain_spec: self
                     .chain_spec
                     .ok_or("Cannot build AttestationService without chain_spec")?,
+                disable: self.disable,
             }),
         })
     }
@@ -101,6 +109,7 @@ pub struct Inner<S, T> {
     beacon_nodes: Arc<BeaconNodeFallback<T>>,
     executor: TaskExecutor,
     chain_spec: Arc<ChainSpec>,
+    disable: bool,
 }
 
 /// Attempts to produce attestations for all known validators 1/3rd of the way through each slot.
@@ -131,6 +140,11 @@ impl<S, T> Deref for AttestationService<S, T> {
 impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationService<S, T> {
     /// Starts the service which periodically produces attestations.
     pub fn start_update_service(self, spec: &ChainSpec) -> Result<(), String> {
+        if self.disable {
+            info!("Attestation service disabled");
+            return Ok(());
+        }
+
         let slot_duration = Duration::from_secs(spec.seconds_per_slot);
         let duration_to_next_slot = self
             .slot_clock
@@ -357,7 +371,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationService<S, 
             if !duty.match_attestation_data::<S::E>(attestation_data, &self.chain_spec) {
                 crit!(
                     validator = ?duty.pubkey,
-                    duty_slot = ?duty.slot,
+                    duty_slot = %duty.slot,
                     attestation_slot = %attestation_data.slot,
                     duty_index = duty.committee_index,
                     attestation_index = attestation_data.index,
@@ -462,7 +476,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationService<S, 
                                         committee_index = attestation_data.index,
                                         slot = slot.as_u64(),
                                         "type" = "unaggregated",
-                                        "Unable to convert to SingleAttestation",
+                                        "Unable to convert to SingleAttestation"
                                     );
                                     None
                                 }

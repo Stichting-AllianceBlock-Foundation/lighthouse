@@ -219,6 +219,7 @@ pub struct DutiesServiceBuilder<S, T> {
     enable_high_validator_count_metrics: bool,
     /// If this validator is running in distributed mode.
     distributed: bool,
+    disable_attesting: bool,
 }
 
 impl<S, T> Default for DutiesServiceBuilder<S, T> {
@@ -237,6 +238,7 @@ impl<S, T> DutiesServiceBuilder<S, T> {
             spec: None,
             enable_high_validator_count_metrics: false,
             distributed: false,
+            disable_attesting: false,
         }
     }
 
@@ -278,6 +280,11 @@ impl<S, T> DutiesServiceBuilder<S, T> {
         self
     }
 
+    pub fn disable_attesting(mut self, disable_attesting: bool) -> Self {
+        self.disable_attesting = disable_attesting;
+        self
+    }
+
     pub fn build(self) -> Result<DutiesService<S, T>, String> {
         Ok(DutiesService {
             attesters: Default::default(),
@@ -299,6 +306,7 @@ impl<S, T> DutiesServiceBuilder<S, T> {
             spec: self.spec.ok_or("Cannot build DutiesService without spec")?,
             enable_high_validator_count_metrics: self.enable_high_validator_count_metrics,
             distributed: self.distributed,
+            disable_attesting: self.disable_attesting,
         })
     }
 }
@@ -328,6 +336,7 @@ pub struct DutiesService<S, T> {
     pub enable_high_validator_count_metrics: bool,
     /// If this validator is running in distributed mode.
     pub distributed: bool,
+    pub disable_attesting: bool,
 }
 
 impl<S: ValidatorStore, T: SlotClock + 'static> DutiesService<S, T> {
@@ -380,7 +389,7 @@ impl<S: ValidatorStore, T: SlotClock + 'static> DutiesService<S, T> {
     ///
     /// It is possible that multiple validators have an identical proposal slot, however that is
     /// likely the result of heavy forking (lol) or inconsistent beacon node connections.
-    pub fn block_proposers<E: EthSpec>(&self, slot: Slot) -> HashSet<PublicKeyBytes> {
+    pub fn block_proposers(&self, slot: Slot) -> HashSet<PublicKeyBytes> {
         let epoch = slot.epoch(S::E::slots_per_epoch());
 
         // Only collect validators that are considered safe in terms of doppelganger protection.
@@ -498,6 +507,11 @@ pub fn start_update_service<S: ValidatorStore + 'static, T: SlotClock + 'static>
         },
         "duties_service_proposers",
     );
+
+    // Skip starting attestation duties or sync committee services.
+    if core_duties_service.disable_attesting {
+        return;
+    }
 
     /*
      * Spawn the task which keeps track of local attestation duties.
@@ -910,10 +924,10 @@ async fn poll_beacon_attesters_for_epoch<S: ValidatorStore + 'static, T: SlotClo
         local_pubkeys
             .iter()
             .filter(|pubkey| {
-                attesters.get(pubkey).map_or(true, |duties| {
+                attesters.get(pubkey).is_none_or(|duties| {
                     duties
                         .get(&epoch)
-                        .map_or(true, |(prior, _)| *prior != dependent_root)
+                        .is_none_or(|(prior, _)| *prior != dependent_root)
                 })
             })
             .collect::<Vec<_>>()
@@ -1038,7 +1052,7 @@ fn get_uninitialized_validators<S: ValidatorStore, T: SlotClock + 'static>(
         .filter(|pubkey| {
             attesters
                 .get(pubkey)
-                .map_or(true, |duties| !duties.contains_key(epoch))
+                .is_none_or(|duties| !duties.contains_key(epoch))
         })
         .filter_map(|pubkey| duties_service.validator_store.validator_index(pubkey))
         .collect::<Vec<_>>()
@@ -1295,7 +1309,7 @@ async fn poll_beacon_proposers<S: ValidatorStore, T: SlotClock + 'static>(
     // Notify the block proposal service for any proposals that we have in our cache.
     //
     // See the function-level documentation for more information.
-    let initial_block_proposers = duties_service.block_proposers::<S::E>(current_slot);
+    let initial_block_proposers = duties_service.block_proposers(current_slot);
     notify_block_production_service::<S>(
         current_slot,
         &initial_block_proposers,
@@ -1372,7 +1386,7 @@ async fn poll_beacon_proposers<S: ValidatorStore, T: SlotClock + 'static>(
         // Then, compute the difference between these two sets to obtain a set of block proposers
         // which were not included in the initial notification to the `BlockService`.
         let additional_block_producers = duties_service
-            .block_proposers::<S::E>(current_slot)
+            .block_proposers(current_slot)
             .difference(&initial_block_proposers)
             .copied()
             .collect::<HashSet<PublicKeyBytes>>();
