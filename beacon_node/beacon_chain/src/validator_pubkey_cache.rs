@@ -1,6 +1,7 @@
 use crate::errors::BeaconChainError;
 use crate::{BeaconChainTypes, BeaconStore};
 use bls::PUBLIC_KEY_UNCOMPRESSED_BYTES_LEN;
+use slog::debug;
 use smallvec::SmallVec;
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
