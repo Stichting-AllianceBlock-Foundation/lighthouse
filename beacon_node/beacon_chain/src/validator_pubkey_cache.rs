@@ -1,7 +1,7 @@
 use crate::errors::BeaconChainError;
 use crate::{BeaconChainTypes, BeaconStore};
 use bls::PUBLIC_KEY_UNCOMPRESSED_BYTES_LEN;
-use slog::debug;
+use slog::{debug, Logger};
 use smallvec::SmallVec;
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
@@ -19,6 +19,7 @@ use types::{BeaconState, FixedBytesExtended, Hash256, PublicKey, PublicKeyBytes}
 ///    keys in compressed form and they are needed in decompressed form for signature verification.
 ///    Decompression is expensive when many keys are involved.
 pub struct ValidatorPubkeyCache<T: BeaconChainTypes> {
+    log: Logger,
     pubkeys: Vec<PublicKey>,
     indices: HashMap<PublicKeyBytes, usize>,
     pubkey_bytes: Vec<PublicKeyBytes>,
@@ -34,6 +35,7 @@ impl<T: BeaconChainTypes> ValidatorPubkeyCache<T> {
         store: BeaconStore<T>,
     ) -> Result<Self, BeaconChainError> {
         let mut cache = Self {
+            log: store.log.clone(),
             pubkeys: vec![],
             indices: HashMap::new(),
             pubkey_bytes: vec![],
@@ -65,9 +67,14 @@ impl<T: BeaconChainTypes> ValidatorPubkeyCache<T> {
             }
         }
 
-        debug!(indices = indices.len(), "Loaded pubkey cache from store");
+        let indices_len = indices.len();
+        debug!(
+            store.log,
+            "Loaded pubkey cache from store. Indices: {}", indices_len
+        );
 
         Ok(ValidatorPubkeyCache {
+            log: store.log.clone(),
             pubkeys,
             indices,
             pubkey_bytes,
@@ -108,9 +115,10 @@ impl<T: BeaconChainTypes> ValidatorPubkeyCache<T> {
         self.pubkeys.reserve(validator_keys.len());
         self.indices.reserve(validator_keys.len());
 
+        let count = validator_keys.len();
         debug!(
-            count = validator_keys.len(),
-            "Importing new pubkeys to the pubkey cache"
+            self.log,
+            "Importing new pubkeys to the pubkey cache. count: {}", count
         );
 
         let mut store_ops = Vec::with_capacity(validator_keys.len());
