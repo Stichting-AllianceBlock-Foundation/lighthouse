@@ -1,5 +1,6 @@
 use beacon_node_fallback::{ApiTopic, BeaconNodeFallback, Error as FallbackError, Errors};
 use bls::SignatureBytes;
+use environment::RuntimeContext;
 use eth2::types::{FullBlockContents, PublishBlockRequest};
 use eth2::{BeaconNodeHttpClient, StatusCode};
 use graffiti_file::{determine_graffiti, GraffitiFile};
@@ -10,12 +11,11 @@ use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
-use task_executor::TaskExecutor;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 use types::{
-    BlindedBeaconBlock, BlockType, ChainSpec, EthSpec, Graffiti, PublicKeyBytes,
-    SignedBlindedBeaconBlock, Slot,
+    BlindedBeaconBlock, BlockType, EthSpec, Graffiti, PublicKeyBytes, SignedBlindedBeaconBlock,
+    Slot,
 };
 use validator_store::{Error as ValidatorStoreError, ValidatorStore};
 
@@ -45,32 +45,30 @@ impl From<Errors<BlockError>> for BlockError {
 
 /// Builds a `BlockService`.
 #[derive(Default)]
-pub struct BlockServiceBuilder<S, T> {
-    validator_store: Option<Arc<S>>,
+pub struct BlockServiceBuilder<T, E: EthSpec> {
+    validator_store: Option<Arc<ValidatorStore<T, E>>>,
     slot_clock: Option<Arc<T>>,
-    beacon_nodes: Option<Arc<BeaconNodeFallback<T>>>,
-    proposer_nodes: Option<Arc<BeaconNodeFallback<T>>>,
-    executor: Option<TaskExecutor>,
-    chain_spec: Option<Arc<ChainSpec>>,
+    beacon_nodes: Option<Arc<BeaconNodeFallback<T, E>>>,
+    proposer_nodes: Option<Arc<BeaconNodeFallback<T, E>>>,
+    context: Option<RuntimeContext<E>>,
     graffiti: Option<Graffiti>,
     graffiti_file: Option<GraffitiFile>,
 }
 
-impl<S: ValidatorStore, T: SlotClock + 'static> BlockServiceBuilder<S, T> {
+impl<T: SlotClock + 'static, E: EthSpec> BlockServiceBuilder<T, E> {
     pub fn new() -> Self {
         Self {
             validator_store: None,
             slot_clock: None,
             beacon_nodes: None,
             proposer_nodes: None,
-            executor: None,
-            chain_spec: None,
+            context: None,
             graffiti: None,
             graffiti_file: None,
         }
     }
 
-    pub fn validator_store(mut self, store: Arc<S>) -> Self {
+    pub fn validator_store(mut self, store: Arc<ValidatorStore<T, E>>) -> Self {
         self.validator_store = Some(store);
         self
     }
@@ -80,23 +78,18 @@ impl<S: ValidatorStore, T: SlotClock + 'static> BlockServiceBuilder<S, T> {
         self
     }
 
-    pub fn beacon_nodes(mut self, beacon_nodes: Arc<BeaconNodeFallback<T>>) -> Self {
+    pub fn beacon_nodes(mut self, beacon_nodes: Arc<BeaconNodeFallback<T, E>>) -> Self {
         self.beacon_nodes = Some(beacon_nodes);
         self
     }
 
-    pub fn proposer_nodes(mut self, proposer_nodes: Arc<BeaconNodeFallback<T>>) -> Self {
+    pub fn proposer_nodes(mut self, proposer_nodes: Arc<BeaconNodeFallback<T, E>>) -> Self {
         self.proposer_nodes = Some(proposer_nodes);
         self
     }
 
-    pub fn executor(mut self, executor: TaskExecutor) -> Self {
-        self.executor = Some(executor);
-        self
-    }
-
-    pub fn chain_spec(mut self, chain_spec: Arc<ChainSpec>) -> Self {
-        self.chain_spec = Some(chain_spec);
+    pub fn runtime_context(mut self, context: RuntimeContext<E>) -> Self {
+        self.context = Some(context);
         self
     }
 
@@ -110,7 +103,7 @@ impl<S: ValidatorStore, T: SlotClock + 'static> BlockServiceBuilder<S, T> {
         self
     }
 
-    pub fn build(self) -> Result<BlockService<S, T>, String> {
+    pub fn build(self) -> Result<BlockService<T, E>, String> {
         Ok(BlockService {
             inner: Arc::new(Inner {
                 validator_store: self
@@ -122,12 +115,9 @@ impl<S: ValidatorStore, T: SlotClock + 'static> BlockServiceBuilder<S, T> {
                 beacon_nodes: self
                     .beacon_nodes
                     .ok_or("Cannot build BlockService without beacon_node")?,
-                executor: self
-                    .executor
-                    .ok_or("Cannot build BlockService without executor")?,
-                chain_spec: self
-                    .chain_spec
-                    .ok_or("Cannot build BlockService without chain_spec")?,
+                context: self
+                    .context
+                    .ok_or("Cannot build BlockService without runtime_context")?,
                 proposer_nodes: self.proposer_nodes,
                 graffiti: self.graffiti,
                 graffiti_file: self.graffiti_file,
@@ -138,12 +128,12 @@ impl<S: ValidatorStore, T: SlotClock + 'static> BlockServiceBuilder<S, T> {
 
 // Combines a set of non-block-proposing `beacon_nodes` and only-block-proposing
 // `proposer_nodes`.
-pub struct ProposerFallback<T> {
-    beacon_nodes: Arc<BeaconNodeFallback<T>>,
-    proposer_nodes: Option<Arc<BeaconNodeFallback<T>>>,
+pub struct ProposerFallback<T, E: EthSpec> {
+    beacon_nodes: Arc<BeaconNodeFallback<T, E>>,
+    proposer_nodes: Option<Arc<BeaconNodeFallback<T, E>>>,
 }
 
-impl<T: SlotClock> ProposerFallback<T> {
+impl<T: SlotClock, E: EthSpec> ProposerFallback<T, E> {
     // Try `func` on `self.proposer_nodes` first. If that doesn't work, try `self.beacon_nodes`.
     pub async fn request_proposers_first<F, Err, R>(&self, func: F) -> Result<(), Errors<Err>>
     where
@@ -188,23 +178,22 @@ impl<T: SlotClock> ProposerFallback<T> {
 }
 
 /// Helper to minimise `Arc` usage.
-pub struct Inner<S, T> {
-    validator_store: Arc<S>,
+pub struct Inner<T, E: EthSpec> {
+    validator_store: Arc<ValidatorStore<T, E>>,
     slot_clock: Arc<T>,
-    pub beacon_nodes: Arc<BeaconNodeFallback<T>>,
-    pub proposer_nodes: Option<Arc<BeaconNodeFallback<T>>>,
-    executor: TaskExecutor,
-    chain_spec: Arc<ChainSpec>,
+    pub beacon_nodes: Arc<BeaconNodeFallback<T, E>>,
+    pub proposer_nodes: Option<Arc<BeaconNodeFallback<T, E>>>,
+    context: RuntimeContext<E>,
     graffiti: Option<Graffiti>,
     graffiti_file: Option<GraffitiFile>,
 }
 
 /// Attempts to produce attestations for any block producer(s) at the start of the epoch.
-pub struct BlockService<S, T> {
-    inner: Arc<Inner<S, T>>,
+pub struct BlockService<T, E: EthSpec> {
+    inner: Arc<Inner<T, E>>,
 }
 
-impl<S, T> Clone for BlockService<S, T> {
+impl<T, E: EthSpec> Clone for BlockService<T, E> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -212,8 +201,8 @@ impl<S, T> Clone for BlockService<S, T> {
     }
 }
 
-impl<S, T> Deref for BlockService<S, T> {
-    type Target = Inner<S, T>;
+impl<T, E: EthSpec> Deref for BlockService<T, E> {
+    type Target = Inner<T, E>;
 
     fn deref(&self) -> &Self::Target {
         self.inner.deref()
@@ -226,14 +215,14 @@ pub struct BlockServiceNotification {
     pub block_proposers: Vec<PublicKeyBytes>,
 }
 
-impl<S: ValidatorStore + 'static, T: SlotClock + 'static> BlockService<S, T> {
+impl<T: SlotClock + 'static, E: EthSpec> BlockService<T, E> {
     pub fn start_update_service(
         self,
         mut notification_rx: mpsc::Receiver<BlockServiceNotification>,
     ) -> Result<(), String> {
         info!("Block production service started");
 
-        let executor = self.inner.executor.clone();
+        let executor = self.inner.context.executor.clone();
 
         executor.spawn(
             async move {
@@ -269,7 +258,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> BlockService<S, T> {
             return Ok(());
         }
 
-        if slot == self.chain_spec.genesis_slot {
+        if slot == self.context.eth2_config.spec.genesis_slot {
             debug!(
                 proposers = format!("{:?}", notification.block_proposers),
                 "Not producing block at genesis slot"
@@ -298,7 +287,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> BlockService<S, T> {
         for validator_pubkey in proposers {
             let builder_boost_factor = self.get_builder_boost_factor(&validator_pubkey);
             let service = self.clone();
-            self.inner.executor.spawn(
+            self.inner.context.executor.spawn(
                 async move {
                     let result = service
                         .publish_block(slot, validator_pubkey, builder_boost_factor)
@@ -325,34 +314,29 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> BlockService<S, T> {
     #[allow(clippy::too_many_arguments)]
     async fn sign_and_publish_block(
         &self,
-        proposer_fallback: ProposerFallback<T>,
+        proposer_fallback: ProposerFallback<T, E>,
         slot: Slot,
         graffiti: Option<Graffiti>,
         validator_pubkey: &PublicKeyBytes,
-        unsigned_block: UnsignedBlock<S::E>,
+        unsigned_block: UnsignedBlock<E>,
     ) -> Result<(), BlockError> {
         let signing_timer = validator_metrics::start_timer(&validator_metrics::BLOCK_SIGNING_TIMES);
 
-        let (block, maybe_blobs) = match unsigned_block {
+        let res = match unsigned_block {
             UnsignedBlock::Full(block_contents) => {
                 let (block, maybe_blobs) = block_contents.deconstruct();
-                (block.into(), maybe_blobs)
+                self.validator_store
+                    .sign_block(*validator_pubkey, block, slot)
+                    .await
+                    .map(|b| SignedBlock::Full(PublishBlockRequest::new(Arc::new(b), maybe_blobs)))
             }
-            UnsignedBlock::Blinded(block) => (block.into(), None),
+            UnsignedBlock::Blinded(block) => self
+                .validator_store
+                .sign_block(*validator_pubkey, block, slot)
+                .await
+                .map(Arc::new)
+                .map(SignedBlock::Blinded),
         };
-
-        let res = self
-            .validator_store
-            .sign_block(*validator_pubkey, block, slot)
-            .await
-            .map(|block| match block {
-                validator_store::SignedBlock::Full(block) => {
-                    SignedBlock::Full(PublishBlockRequest::new(Arc::new(block), maybe_blobs))
-                }
-                validator_store::SignedBlock::Blinded(block) => {
-                    SignedBlock::Blinded(Arc::new(block))
-                }
-            });
 
         let signed_block = match res {
             Ok(block) => block,
@@ -420,7 +404,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> BlockService<S, T> {
 
         let randao_reveal = match self
             .validator_store
-            .randao_reveal(validator_pubkey, slot.epoch(S::E::slots_per_epoch()))
+            .randao_reveal(validator_pubkey, slot.epoch(E::slots_per_epoch()))
             .await
         {
             Ok(signature) => signature.into(),
@@ -503,7 +487,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> BlockService<S, T> {
 
     async fn publish_signed_block_contents(
         &self,
-        signed_block: &SignedBlock<S::E>,
+        signed_block: &SignedBlock<E>,
         beacon_node: BeaconNodeHttpClient,
     ) -> Result<(), BlockError> {
         let slot = signed_block.slot();
@@ -539,9 +523,9 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> BlockService<S, T> {
         graffiti: Option<Graffiti>,
         proposer_index: Option<u64>,
         builder_boost_factor: Option<u64>,
-    ) -> Result<UnsignedBlock<S::E>, BlockError> {
+    ) -> Result<UnsignedBlock<E>, BlockError> {
         let (block_response, _) = beacon_node
-            .get_validator_blocks_v3::<S::E>(
+            .get_validator_blocks_v3::<E>(
                 slot,
                 randao_reveal_ref,
                 graffiti.as_ref(),
@@ -579,9 +563,15 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> BlockService<S, T> {
         // Apply per validator configuration first.
         let validator_builder_boost_factor = self
             .validator_store
-            .determine_builder_boost_factor(validator_pubkey);
+            .determine_validator_builder_boost_factor(validator_pubkey);
 
-        if let Some(builder_boost_factor) = validator_builder_boost_factor {
+        // Fallback to process-wide configuration if needed.
+        let maybe_builder_boost_factor = validator_builder_boost_factor.or_else(|| {
+            self.validator_store
+                .determine_default_builder_boost_factor()
+        });
+
+        if let Some(builder_boost_factor) = maybe_builder_boost_factor {
             // if builder boost factor is set to 100 it should be treated
             // as None to prevent unnecessary calculations that could
             // lead to loss of information.

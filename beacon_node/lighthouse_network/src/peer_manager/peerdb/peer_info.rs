@@ -4,7 +4,6 @@ use super::sync_status::SyncStatus;
 use crate::discovery::Eth2Enr;
 use crate::{rpc::MetaData, types::Subnet};
 use discv5::Enr;
-use eth2::types::{PeerDirection, PeerState};
 use libp2p::core::multiaddr::{Multiaddr, Protocol};
 use serde::{
     ser::{SerializeStruct, Serializer},
@@ -233,6 +232,11 @@ impl<E: EthSpec> PeerInfo<E> {
     /// Returns if the peer is assigned to a given `DataColumnSubnetId`.
     pub fn is_assigned_to_custody_subnet(&self, subnet: &DataColumnSubnetId) -> bool {
         self.custody_subnets.contains(subnet)
+    }
+
+    /// Returns an iterator on this peer's custody subnets
+    pub fn custody_subnets_iter(&self) -> impl Iterator<Item = &DataColumnSubnetId> {
+        self.custody_subnets.iter()
     }
 
     /// Returns true if the peer is connected to a long-lived subnet.
@@ -527,15 +531,6 @@ pub enum ConnectionDirection {
     Outgoing,
 }
 
-impl From<ConnectionDirection> for PeerDirection {
-    fn from(direction: ConnectionDirection) -> Self {
-        match direction {
-            ConnectionDirection::Incoming => PeerDirection::Inbound,
-            ConnectionDirection::Outgoing => PeerDirection::Outbound,
-        }
-    }
-}
-
 /// Connection Status of the peer.
 #[derive(Debug, Clone, Default)]
 pub enum PeerConnectionStatus {
@@ -626,17 +621,6 @@ impl Serialize for PeerConnectionStatus {
                 s.serialize_field("last_seen", &0)?;
                 s.end()
             }
-        }
-    }
-}
-
-impl From<PeerConnectionStatus> for PeerState {
-    fn from(status: PeerConnectionStatus) -> Self {
-        match status {
-            Connected { .. } => PeerState::Connected,
-            Dialing { .. } => PeerState::Connecting,
-            Disconnecting { .. } => PeerState::Disconnecting,
-            Disconnected { .. } | Banned { .. } | Unknown => PeerState::Disconnected,
         }
     }
 }

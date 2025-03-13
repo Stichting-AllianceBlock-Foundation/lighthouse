@@ -9,7 +9,7 @@ pub struct SignedBlock {
 }
 
 /// Reasons why a block may be slashable.
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug)]
 pub enum InvalidBlock {
     DoubleBlockProposal(SignedBlock),
     SlotViolatesLowerBound { block_slot: Slot, bound_slot: Slot },

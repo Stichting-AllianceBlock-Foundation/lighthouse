@@ -1,5 +1,7 @@
 use beacon_node_fallback::{ApiTopic, BeaconNodeFallback};
 use bls::PublicKeyBytes;
+use doppelganger_service::DoppelgangerStatus;
+use environment::RuntimeContext;
 use parking_lot::RwLock;
 use slot_clock::SlotClock;
 use std::collections::HashMap;
@@ -7,16 +9,13 @@ use std::hash::Hash;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use task_executor::TaskExecutor;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 use types::{
     Address, ChainSpec, EthSpec, ProposerPreparationData, SignedValidatorRegistrationData,
     ValidatorRegistrationData,
 };
-use validator_store::{
-    DoppelgangerStatus, Error as ValidatorStoreError, ProposalData, ValidatorStore,
-};
+use validator_store::{Error as ValidatorStoreError, ProposalData, ValidatorStore};
 
 /// Number of epochs before the Bellatrix hard fork to begin posting proposer preparations.
 const PROPOSER_PREPARATION_LOOKAHEAD_EPOCHS: u64 = 2;
@@ -26,28 +25,28 @@ const EPOCHS_PER_VALIDATOR_REGISTRATION_SUBMISSION: u64 = 1;
 
 /// Builds an `PreparationService`.
 #[derive(Default)]
-pub struct PreparationServiceBuilder<S: ValidatorStore, T: SlotClock + 'static> {
-    validator_store: Option<Arc<S>>,
+pub struct PreparationServiceBuilder<T: SlotClock + 'static, E: EthSpec> {
+    validator_store: Option<Arc<ValidatorStore<T, E>>>,
     slot_clock: Option<T>,
-    beacon_nodes: Option<Arc<BeaconNodeFallback<T>>>,
-    executor: Option<TaskExecutor>,
+    beacon_nodes: Option<Arc<BeaconNodeFallback<T, E>>>,
+    context: Option<RuntimeContext<E>>,
     builder_registration_timestamp_override: Option<u64>,
     validator_registration_batch_size: Option<usize>,
 }
 
-impl<S: ValidatorStore, T: SlotClock + 'static> PreparationServiceBuilder<S, T> {
+impl<T: SlotClock + 'static, E: EthSpec> PreparationServiceBuilder<T, E> {
     pub fn new() -> Self {
         Self {
             validator_store: None,
             slot_clock: None,
             beacon_nodes: None,
-            executor: None,
+            context: None,
             builder_registration_timestamp_override: None,
             validator_registration_batch_size: None,
         }
     }
 
-    pub fn validator_store(mut self, store: Arc<S>) -> Self {
+    pub fn validator_store(mut self, store: Arc<ValidatorStore<T, E>>) -> Self {
         self.validator_store = Some(store);
         self
     }
@@ -57,13 +56,13 @@ impl<S: ValidatorStore, T: SlotClock + 'static> PreparationServiceBuilder<S, T> 
         self
     }
 
-    pub fn beacon_nodes(mut self, beacon_nodes: Arc<BeaconNodeFallback<T>>) -> Self {
+    pub fn beacon_nodes(mut self, beacon_nodes: Arc<BeaconNodeFallback<T, E>>) -> Self {
         self.beacon_nodes = Some(beacon_nodes);
         self
     }
 
-    pub fn executor(mut self, executor: TaskExecutor) -> Self {
-        self.executor = Some(executor);
+    pub fn runtime_context(mut self, context: RuntimeContext<E>) -> Self {
+        self.context = Some(context);
         self
     }
 
@@ -83,7 +82,7 @@ impl<S: ValidatorStore, T: SlotClock + 'static> PreparationServiceBuilder<S, T> 
         self
     }
 
-    pub fn build(self) -> Result<PreparationService<S, T>, String> {
+    pub fn build(self) -> Result<PreparationService<T, E>, String> {
         Ok(PreparationService {
             inner: Arc::new(Inner {
                 validator_store: self
@@ -95,9 +94,9 @@ impl<S: ValidatorStore, T: SlotClock + 'static> PreparationServiceBuilder<S, T> 
                 beacon_nodes: self
                     .beacon_nodes
                     .ok_or("Cannot build PreparationService without beacon_nodes")?,
-                executor: self
-                    .executor
-                    .ok_or("Cannot build PreparationService without executor")?,
+                context: self
+                    .context
+                    .ok_or("Cannot build PreparationService without runtime_context")?,
                 builder_registration_timestamp_override: self
                     .builder_registration_timestamp_override,
                 validator_registration_batch_size: self.validator_registration_batch_size.ok_or(
@@ -110,11 +109,11 @@ impl<S: ValidatorStore, T: SlotClock + 'static> PreparationServiceBuilder<S, T> 
 }
 
 /// Helper to minimise `Arc` usage.
-pub struct Inner<S, T> {
-    validator_store: Arc<S>,
+pub struct Inner<T, E: EthSpec> {
+    validator_store: Arc<ValidatorStore<T, E>>,
     slot_clock: T,
-    beacon_nodes: Arc<BeaconNodeFallback<T>>,
-    executor: TaskExecutor,
+    beacon_nodes: Arc<BeaconNodeFallback<T, E>>,
+    context: RuntimeContext<E>,
     builder_registration_timestamp_override: Option<u64>,
     // Used to track unpublished validator registration changes.
     validator_registration_cache:
@@ -146,11 +145,11 @@ impl From<ValidatorRegistrationData> for ValidatorRegistrationKey {
 }
 
 /// Attempts to produce proposer preparations for all known validators at the beginning of each epoch.
-pub struct PreparationService<S, T> {
-    inner: Arc<Inner<S, T>>,
+pub struct PreparationService<T, E: EthSpec> {
+    inner: Arc<Inner<T, E>>,
 }
 
-impl<S, T> Clone for PreparationService<S, T> {
+impl<T, E: EthSpec> Clone for PreparationService<T, E> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -158,15 +157,15 @@ impl<S, T> Clone for PreparationService<S, T> {
     }
 }
 
-impl<S, T> Deref for PreparationService<S, T> {
-    type Target = Inner<S, T>;
+impl<T, E: EthSpec> Deref for PreparationService<T, E> {
+    type Target = Inner<T, E>;
 
     fn deref(&self) -> &Self::Target {
         self.inner.deref()
     }
 }
 
-impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, T> {
+impl<T: SlotClock + 'static, E: EthSpec> PreparationService<T, E> {
     pub fn start_update_service(self, spec: &ChainSpec) -> Result<(), String> {
         self.clone().start_validator_registration_service(spec)?;
         self.start_proposer_prepare_service(spec)
@@ -177,7 +176,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
         let slot_duration = Duration::from_secs(spec.seconds_per_slot);
         info!("Proposer preparation service started");
 
-        let executor = self.executor.clone();
+        let executor = self.context.executor.clone();
         let spec = spec.clone();
 
         let interval_fut = async move {
@@ -216,13 +215,13 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
         let spec = spec.clone();
         let slot_duration = Duration::from_secs(spec.seconds_per_slot);
 
-        let executor = self.executor.clone();
+        let executor = self.context.executor.clone();
 
         let validator_registration_fut = async move {
             loop {
                 // Poll the endpoint immediately to ensure fee recipients are received.
                 if let Err(e) = self.register_validators().await {
-                    error!(error = ?e,"Error during validator registration");
+                    error!(error = ?e, "Error during validator registration");
                 }
 
                 // Wait one slot if the register validator request fails or if we should not publish at the current slot.
@@ -244,9 +243,10 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
     /// This avoids spamming the BN with preparations before the Bellatrix fork epoch, which may
     /// cause errors if it doesn't support the preparation API.
     fn should_publish_at_current_slot(&self, spec: &ChainSpec) -> bool {
-        let current_epoch = self.slot_clock.now().map_or(S::E::genesis_epoch(), |slot| {
-            slot.epoch(S::E::slots_per_epoch())
-        });
+        let current_epoch = self
+            .slot_clock
+            .now()
+            .map_or(E::genesis_epoch(), |slot| slot.epoch(E::slots_per_epoch()));
         spec.bellatrix_fork_epoch.is_some_and(|fork_epoch| {
             current_epoch + PROPOSER_PREPARATION_LOOKAHEAD_EPOCHS >= fork_epoch
         })
@@ -367,8 +367,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
 
         // Check if any have changed or it's been `EPOCHS_PER_VALIDATOR_REGISTRATION_SUBMISSION`.
         if let Some(slot) = self.slot_clock.now() {
-            if slot % (S::E::slots_per_epoch() * EPOCHS_PER_VALIDATOR_REGISTRATION_SUBMISSION) == 0
-            {
+            if slot % (E::slots_per_epoch() * EPOCHS_PER_VALIDATOR_REGISTRATION_SUBMISSION) == 0 {
                 self.publish_validator_registration_data(registration_keys)
                     .await?;
             } else if !changed_keys.is_empty() {
@@ -410,7 +409,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
                     pubkey,
                 } = key.clone();
 
-                let signed_data = match self
+                match self
                     .validator_store
                     .sign_validator_registration_data(ValidatorRegistrationData {
                         fee_recipient,
@@ -435,13 +434,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
                         );
                         continue;
                     }
-                };
-
-                self.validator_registration_cache
-                    .write()
-                    .insert(key, signed_data.clone());
-
-                signed_data
+                }
             };
             signed.push(signed_data);
         }
@@ -455,10 +448,19 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
                     })
                     .await
                 {
-                    Ok(()) => info!(
-                        count = batch.len(),
-                        "Published validator registrations to the builder network"
-                    ),
+                    Ok(()) => {
+                        info!(
+                            count = batch.len(),
+                            "Published validator registrations to the builder network"
+                        );
+                        let mut guard = self.validator_registration_cache.write();
+                        for signed_data in batch {
+                            guard.insert(
+                                ValidatorRegistrationKey::from(signed_data.message.clone()),
+                                signed_data.clone(),
+                            );
+                        }
+                    }
                     Err(e) => warn!(
                         error = %e,
                         "Unable to publish validator registrations to the builder network"

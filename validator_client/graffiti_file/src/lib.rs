@@ -1,11 +1,11 @@
+use bls::PublicKeyBytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
 use std::path::PathBuf;
 use std::str::FromStr;
-
-use bls::PublicKeyBytes;
+use tracing::warn;
 use types::{graffiti::GraffitiString, Graffiti};
 
 #[derive(Debug)]
@@ -111,10 +111,14 @@ pub fn determine_graffiti(
     validator_definition_graffiti: Option<Graffiti>,
     graffiti_flag: Option<Graffiti>,
 ) -> Option<Graffiti> {
-    // TODO when merging make sure logging on failure is back:
-    // warn!(log, "Failed to read graffiti file"; "error" => ?e);
     graffiti_file
-        .and_then(|mut g| g.load_graffiti(validator_pubkey).unwrap_or(None))
+        .and_then(|mut g| match g.load_graffiti(validator_pubkey) {
+            Ok(g) => g,
+            Err(e) => {
+                warn!(error = ?e, "Failed to read graffiti file");
+                None
+            }
+        })
         .or(validator_definition_graffiti)
         .or(graffiti_flag)
 }

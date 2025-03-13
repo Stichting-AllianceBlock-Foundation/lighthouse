@@ -18,13 +18,12 @@ use eth2::{
     Error as ApiError,
 };
 use eth2_keystore::KeystoreBuilder;
-use lighthouse_validator_store::{Config as ValidatorStoreConfig, LighthouseValidatorStore};
-use logging::test_logger;
 use parking_lot::RwLock;
 use sensitive_url::SensitiveUrl;
 use slashing_protection::{SlashingDatabase, SLASHING_PROTECTION_FILENAME};
 use slot_clock::{SlotClock, TestingSlotClock};
 use std::future::Future;
+use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -32,7 +31,7 @@ use std::time::Duration;
 use task_executor::test_utils::TestRuntime;
 use tempfile::{tempdir, TempDir};
 use types::graffiti::GraffitiString;
-use validator_store::ValidatorStore;
+use validator_store::{Config as ValidatorStoreConfig, ValidatorStore};
 use zeroize::Zeroizing;
 
 const PASSWORD_BYTES: &[u8] = &[42, 50, 37];
@@ -43,7 +42,7 @@ type E = MainnetEthSpec;
 struct ApiTester {
     client: ValidatorClientHttpClient,
     initialized_validators: Arc<RwLock<InitializedValidators>>,
-    validator_store: Arc<LighthouseValidatorStore<TestingSlotClock, E>>,
+    validator_store: Arc<ValidatorStore<TestingSlotClock, E>>,
     url: SensitiveUrl,
     slot_clock: TestingSlotClock,
     _validator_dir: TempDir,
@@ -61,8 +60,6 @@ impl ApiTester {
     }
 
     pub async fn new_with_config(config: ValidatorStoreConfig) -> Self {
-        let log = test_logger();
-
         let validator_dir = tempdir().unwrap();
         let secrets_dir = tempdir().unwrap();
         let token_path = tempdir().unwrap().path().join("api-token.txt");
@@ -73,7 +70,6 @@ impl ApiTester {
             validator_defs,
             validator_dir.path().into(),
             InitializedValidatorsConfig::default(),
-            log.clone(),
         )
         .await
         .unwrap();
@@ -95,16 +91,15 @@ impl ApiTester {
 
         let test_runtime = TestRuntime::default();
 
-        let validator_store = Arc::new(LighthouseValidatorStore::new(
+        let validator_store = Arc::new(ValidatorStore::<_, E>::new(
             initialized_validators,
             slashing_protection,
             Hash256::repeat_byte(42),
             spec.clone(),
-            Some(Arc::new(DoppelgangerService::new(log.clone()))),
+            Some(Arc::new(DoppelgangerService::default())),
             slot_clock.clone(),
             &config,
             test_runtime.task_executor.clone(),
-            log.clone(),
         ));
 
         validator_store
@@ -113,7 +108,7 @@ impl ApiTester {
 
         let initialized_validators = validator_store.initialized_validators();
 
-        let context = Arc::new(Context::<_, E> {
+        let context = Arc::new(Context {
             task_executor: test_runtime.task_executor.clone(),
             api_secret,
             block_service: None,
@@ -133,12 +128,12 @@ impl ApiTester {
                 http_token_path: token_path,
             },
             sse_logging_components: None,
-            log,
             slot_clock: slot_clock.clone(),
+            _phantom: PhantomData,
         });
         let ctx = context.clone();
         let (listening_socket, server) =
-            super::serve::<_, E>(ctx, test_runtime.task_executor.exit()).unwrap();
+            super::serve(ctx, test_runtime.task_executor.exit()).unwrap();
 
         tokio::spawn(server);
 
@@ -707,7 +702,7 @@ impl ApiTester {
 
         assert_eq!(
             self.validator_store
-                .determine_builder_boost_factor(&validator.voting_pubkey),
+                .determine_validator_builder_boost_factor(&validator.voting_pubkey),
             builder_boost_factor
         );
 
@@ -717,7 +712,7 @@ impl ApiTester {
     pub fn assert_default_builder_boost_factor(self, builder_boost_factor: Option<u64>) -> Self {
         assert_eq!(
             self.validator_store
-                .determine_builder_boost_factor(&PublicKeyBytes::empty()),
+                .determine_default_builder_boost_factor(),
             builder_boost_factor
         );
 
@@ -1164,7 +1159,7 @@ async fn validator_derived_builder_boost_factor_with_process_defaults() {
         })
         .await
         .assert_default_builder_boost_factor(Some(80))
-        .assert_validator_derived_builder_boost_factor(0, Some(80))
+        .assert_validator_derived_builder_boost_factor(0, None)
         .await
         .set_builder_proposals(0, false)
         .await

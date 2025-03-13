@@ -16,12 +16,11 @@ pub mod types;
 
 use self::mixin::{RequestAccept, ResponseOptional};
 use self::types::{Error as ResponseError, *};
-use ::types::fork_versioned_response::ExecutionOptimisticFinalizedForkVersionedResponse;
 use derivative::Derivative;
 use either::Either;
 use futures::Stream;
 use futures_util::StreamExt;
-use libp2p_identity::PeerId;
+use lighthouse_network::PeerId;
 use pretty_reqwest_error::PrettyReqwestError;
 pub use reqwest;
 use reqwest::{
@@ -37,6 +36,7 @@ use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
+use store::fork_versioned_response::ExecutionOptimisticFinalizedForkVersionedResponse;
 
 pub const V1: EndpointVersion = EndpointVersion(1);
 pub const V2: EndpointVersion = EndpointVersion(2);
