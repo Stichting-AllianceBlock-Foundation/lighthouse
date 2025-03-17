@@ -1138,11 +1138,10 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
             let lookahead_slot = current_slot + selection_lookahead;
 
             let relevant_duties = if duties_service.distributed {
-                if let Some(duties) = duties_by_slot.remove(&lookahead_slot) {
-                    BTreeMap::from([(lookahead_slot, duties)])
-                } else {
-                    BTreeMap::new()
-                }
+                duties_by_slot
+                    .remove(&lookahead_slot)
+                    .map(|duties| BTreeMap::from([(lookahead_slot, duties)]))
+                    .unwrap_or_default()
             } else {
                 let mut duties = duties_by_slot.split_off(&lookahead_slot);
                 std::mem::swap(&mut duties, &mut duties_by_slot);
