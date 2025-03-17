@@ -313,7 +313,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
                     attester_duties: slot_duration / HTTP_ATTESTER_DUTIES_TIMEOUT_QUOTIENT,
                     attestation_subscriptions: slot_duration
                         / HTTP_ATTESTATION_SUBSCRIPTIONS_TIMEOUT_QUOTIENT,
-                    attestation_aggregators: 2 * slot_duration
+                    attestation_aggregators: slot_duration
                         / HTTP_ATTESTATION_AGGREGATOR_TIMEOUT_QUOTIENT,
                     liveness: slot_duration / HTTP_LIVENESS_TIMEOUT_QUOTIENT,
                     proposal: slot_duration / HTTP_PROPOSAL_TIMEOUT_QUOTIENT,
