@@ -2394,9 +2394,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         GossipVerifiedInclusionList::verify(inclusion_list, self).inspect(|v| {
             metrics::inc_counter(&metrics::INCLUSION_LIST_PROCESSING_SUCCESSES);
             if let Some(event_handler) = self.event_handler.as_ref() {
-                event_handler.register(EventKind::InclusionList(Box::new(
-                    v.signed_il.clone(),
-                )));
+                event_handler.register(EventKind::InclusionList(Box::new(v.signed_il.clone())));
             }
         })
     }
