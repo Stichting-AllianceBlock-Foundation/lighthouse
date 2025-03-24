@@ -1159,7 +1159,9 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                 &[validator_metrics::ATTESTATION_SELECTION_PROOFS],
             );
 
-            // In distributed case, sign selection proofs in parallel; otherwise, sign them serially in non-distributed case
+            // In distributed case, we want to send all partial selection proofs to the middleware to determine aggregation duties,
+            // as the middleware will need to have a threshold of partial selection proof to be able to return the full selection proof
+            // Thus, sign selection proofs in parallel in distributed case; Otherwise, sign them serially in non-distributed (normal) case
             let duty_and_proof_results = if duties_service.distributed {
                 futures::future::join_all(relevant_duties.into_values().flatten().map(
                     |duty| async {

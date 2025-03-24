@@ -141,6 +141,7 @@ pub struct Timeouts {
     pub proposer_duties: Duration,
     pub sync_committee_contribution: Duration,
     pub sync_duties: Duration,
+    pub sync_aggregators: Duration,
     pub get_beacon_blocks_ssz: Duration,
     pub get_debug_beacon_states: Duration,
     pub get_deposit_snapshot: Duration,
@@ -159,6 +160,7 @@ impl Timeouts {
             proposer_duties: timeout,
             sync_committee_contribution: timeout,
             sync_duties: timeout,
+            sync_aggregators: timeout,
             get_beacon_blocks_ssz: timeout,
             get_debug_beacon_states: timeout,
             get_deposit_snapshot: timeout,
@@ -2685,6 +2687,22 @@ impl BeaconNodeHttpClient {
             self.timeouts.attestation_aggregators,
         )
         .await
+    }
+
+    /// `POST validator/sync_committee_selections`
+    pub async fn post_validator_sync_committee_selections(
+        &self,
+        selections: &[SyncCommitteeSelection],
+    ) -> Result<GenericResponse<Vec<SyncCommitteeSelection>>, Error> {
+        let mut path = self.eth_path(V1)?;
+
+        path.path_segments_mut()
+            .map_err(|()| Error::InvalidUrl(self.server.clone()))?
+            .push("validator")
+            .push("sync_committee_selections");
+
+        self.post_with_timeout_and_response(path, &selections, self.timeouts.sync_aggregators)
+            .await
     }
 }
 

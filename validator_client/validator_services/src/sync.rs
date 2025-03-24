@@ -1,5 +1,6 @@
 use crate::duties_service::{DutiesService, Error};
 use doppelganger_service::DoppelgangerStatus;
+use eth2::types::SyncCommitteeSelection;
 use futures::future::join_all;
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use slog::{crit, debug, info, warn};
@@ -542,61 +543,140 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
 
             // Create futures to produce proofs.
             let duties_service_ref = &duties_service;
-            let futures = subnet_ids.iter().map(|subnet_id| async move {
-                // Construct proof for prior slot.
-                let proof_slot = slot - 1;
+            let futures = subnet_ids.iter().map(|subnet_id| {
+                let duties_service = duties_service.clone();
+                async move {
+                    // Construct proof for prior slot.
+                    let proof_slot = slot - 1;
 
-                let proof = match duties_service_ref
-                    .validator_store
-                    .produce_sync_selection_proof(&duty.pubkey, proof_slot, *subnet_id)
-                    .await
-                {
-                    Ok(proof) => proof,
-                    Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
-                        // A pubkey can be missing when a validator was recently
-                        // removed via the API.
-                        debug!(
-                            log,
-                            "Missing pubkey for sync selection proof";
-                            "pubkey" => ?pubkey,
-                            "pubkey" => ?duty.pubkey,
-                            "slot" => proof_slot,
-                        );
-                        return None;
-                    }
-                    Err(e) => {
-                        warn!(
-                            log,
-                            "Unable to sign selection proof";
-                            "error" => ?e,
-                            "pubkey" => ?duty.pubkey,
-                            "slot" => proof_slot,
-                        );
-                        return None;
-                    }
-                };
+                    let proof = if duties_service.distributed {
+                        let sync_selection_proof = SyncCommitteeSelection {
+                            validator_index: duty.validator_index,
+                            slot: proof_slot,
+                            subcommittee_index: **subnet_id,
+                            selection_proof: match duties_service_ref
+                                .validator_store
+                                .produce_sync_selection_proof(&duty.pubkey, proof_slot, *subnet_id)
+                                .await
+                            {
+                                Ok(proof) => proof.into(),
+                                Err(e) => {
+                                    return match e {
+                                        ValidatorStoreError::UnknownPubkey(pubkey) => {
+                                            debug!(
+                                                log,
+                                                "Missing pubkey for sync selection proof";
+                                                "pubkey" => ?pubkey,
+                                                "slot" => proof_slot,
+                                            );
+                                            None
+                                        }
+                                        _ => {
+                                            warn!(
+                                                log,
+                                                "Unable to sign selection proof";
+                                                "error" => ?e,
+                                                "pubkey" => ?duty.pubkey,
+                                                "slot" => proof_slot,
+                                            );
+                                            None
+                                        }
+                                    };
+                                }
+                            },
+                        };
 
-                match proof.is_aggregator::<E>() {
-                    Ok(true) => {
-                        debug!(
-                            log,
-                            "Validator is sync aggregator";
-                            "validator_index" => duty.validator_index,
-                            "slot" => proof_slot,
-                            "subnet_id" => %subnet_id,
-                        );
-                        Some(((proof_slot, *subnet_id), proof))
-                    }
-                    Ok(false) => None,
-                    Err(e) => {
-                        warn!(
-                            log,
-                            "Error determining is_aggregator";
-                            "pubkey" => ?duty.pubkey,
-                            "slot" => proof_slot,
-                            "error" => ?e,
-                        );
-                        None
+                        let response = match duties_service
+                            .beacon_nodes
+                            .first_success(|beacon_node| {
+                                let selection = sync_selection_proof.clone();
+                                debug!(
+                                    log,
+                                    "Partial sync selection proof from VC";
+                                    "Sync selection proof" => ?selection,
+                                );
+                                async move {
+                                    let response = beacon_node
+                                        .post_validator_sync_committee_selections(&[selection])
+                                        .await;
+                                    debug!(
+                                        log,
+                                        "Response from middleware for sync";
+                                        "response" => ?response,
+                                    );
+
+                                    response
+                                }
+                            })
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(e) => {
+                                warn! {
+                                    log,
+                                    "Unable to sign selection proof in middleware level";
+                                    "error" => %e,
+                                    "pubkey" => ?duty.pubkey,
+                                    "slot" => proof_slot,
+                                };
+                                return None;
+                            }
+                        };
+                        SyncSelectionProof::from(response.data[0].selection_proof.clone())
+                    } else {
+                        match duties_service_ref
+                            .validator_store
+                            .produce_sync_selection_proof(&duty.pubkey, proof_slot, *subnet_id)
+                            .await
+                        {
+                            Ok(proof) => proof,
+                            Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
+                                // A pubkey can be missing when a validator was recently
+                                // removed via the API.
+                                debug!(
+                                    log,
+                                    "Missing pubkey for sync selection proof";
+                                    "pubkey" => ?pubkey,
+                                    "pubkey" => ?duty.pubkey,
+                                    "slot" => proof_slot,
+                                );
+                                return None;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    log,
+                                    "Unable to sign selection proof";
+                                    "error" => ?e,
+                                    "pubkey" => ?duty.pubkey,
+                                    "slot" => proof_slot,
+                                );
+                                return None;
+                            }
+                        }
+                    };
+
+                    match proof.is_aggregator::<E>() {
+                        Ok(true) => {
+                            debug!(
+                                log,
+                                "Validator is sync aggregator";
+                                "validator_index" => duty.validator_index,
+                                "slot" => proof_slot,
+                                "subnet_id" => %subnet_id,
+                            );
+                            Some(((proof_slot, *subnet_id), proof))
+                        }
+                        Ok(false) => None,
+                        Err(e) => {
+                            warn!(
+                                log,
+                                "Error determining is_aggregator";
+                                "pubkey" => ?duty.pubkey,
+                                "slot" => proof_slot,
+                                "error" => ?e,
+                            );
+                            None
+                        }
                     }
                 }
             });
