@@ -544,9 +544,6 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                     }
                 };
 
-                // Construct proof for prior slot.
-                let proof_slot = slot - 1;
-
                 // Create futures for all subnet IDs for this validator
                 for subnet_id in subnet_ids {
                     let duties_service = duties_service.clone();
@@ -558,18 +555,14 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                         // Produce partial selection proof
                         let sync_selection_proof = duties_service
                             .validator_store
-                            .produce_sync_selection_proof(
-                                &duty.pubkey,
-                                proof_slot,
-                                subnet_id.into(),
-                            )
+                            .produce_sync_selection_proof(&duty.pubkey, slot, subnet_id.into())
                             .await;
 
                         match sync_selection_proof {
                             Ok(proof) => {
                                 let sync_committee_selection = SyncCommitteeSelection {
                                     validator_index: duty.validator_index,
-                                    slot: proof_slot,
+                                    slot,
                                     subcommittee_index: subnet_id,
                                     selection_proof: proof.into(),
                                 };
@@ -580,7 +573,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                     log,
                                     "Missing pubkey for sync selection proof";
                                     "pubkey" => ?pubkey,
-                                    "slot" => proof_slot,
+                                    "slot" => slot,
                                 );
                                 None
                             }
@@ -590,7 +583,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                     "Unable to sign selection proof";
                                     "error" => ?e,
                                     "pubkey" => ?duty.pubkey,
-                                    "slot" => proof_slot,
+                                    "slot" => slot,
                                 );
                                 None
                             }
@@ -612,6 +605,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                     log,
                     "Sending batch of partial sync selection proofs";
                     "count" => selection_proofs.len(),
+                    "slot" => slot,
                 );
 
                 let response = duties_service
@@ -632,6 +626,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                             log,
                             "Received batch response from middleware for sync";
                             "count" => response.data.len(),
+                            "slot" => slot,
                         );
 
                         // Get the sync map to update duties
