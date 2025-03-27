@@ -526,11 +526,8 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
         if duties_service.distributed {
             let mut partial_proofs = Vec::new();
 
-            for (validator_start_slot, duty) in pre_compute_duties {
+            for (_validator_start_slot, duty) in pre_compute_duties {
                 // Proofs are already known at this slot for this validator.
-                if slot < *validator_start_slot {
-                    continue;
-                }
 
                 let subnet_ids = match duty.subnet_ids::<E>() {
                     Ok(subnet_ids) => subnet_ids,
@@ -558,7 +555,11 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                         // Produce partial selection proof
                         let sync_selection_proof = duties_service
                             .validator_store
-                            .produce_sync_selection_proof(&duty.pubkey, slot, subnet_id.into())
+                            .produce_sync_selection_proof(
+                                &duty.pubkey,
+                                proof_slot,
+                                subnet_id.into(),
+                            )
                             .await;
 
                         match sync_selection_proof {
