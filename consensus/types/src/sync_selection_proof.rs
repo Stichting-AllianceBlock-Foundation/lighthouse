@@ -13,7 +13,6 @@ use ssz_types::typenum::Unsigned;
 use std::cmp;
 
 #[derive(arbitrary::Arbitrary, PartialEq, Debug, Clone, Serialize, Deserialize)]
-#[serde(transparent)]
 pub struct SyncSelectionProof(Signature);
 
 impl SyncSelectionProof {
