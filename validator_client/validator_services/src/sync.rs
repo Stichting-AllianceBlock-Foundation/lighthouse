@@ -568,8 +568,17 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                     validator_index: duty.validator_index,
                                     slot: proof_slot,
                                     subcommittee_index: subnet_id,
-                                    selection_proof: proof.into(),
+                                    selection_proof: proof.clone().into(),
                                 };
+                                // Add log for debugging
+                                debug!(
+                                    log,
+                                    "Partial sync selection proof";
+                                    "validator_index" => duty.validator_index,
+                                    "slot" => proof_slot,
+                                    "subcommittee_index" => subnet_id,
+                                    "partial selection proof"  => ?proof,
+                                );
                                 Some(sync_committee_selection)
                             }
                             Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
@@ -647,13 +656,10 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                         let validators = committee_duties.validators.read();
 
                         // Process each response
-                        for (i, selection_response) in response.data.iter().enumerate() {
-                            if i >= valid_results.len() {
-                                break;
-                            }
-
-                            let selection = &valid_results[i];
-                            let subnet_id = SyncSubnetId::new(selection.subcommittee_index);
+                        for selection_response in response.data.iter() {
+                            let validator_index = selection_response.validator_index;
+                            let slot = selection_response.slot;
+                            let subcommittee_index = selection_response.subcommittee_index;
 
                             // Convert the response to a SyncSelectionProof
                             let proof = SyncSelectionProof::from(
@@ -663,22 +669,22 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                             // Check if the validator is an aggregator
                             match proof.is_aggregator::<E>() {
                                 Ok(true) => {
-                                    if let Some(Some(duty)) =
-                                        validators.get(&selection.validator_index)
-                                    {
+                                    if let Some(Some(duty)) = validators.get(&validator_index) {
                                         debug!(
                                             log,
                                             "Validator is sync aggregator";
-                                            "validator_index" => selection.validator_index,
-                                            "slot" => selection.slot,
-                                            "subnet_id" => %subnet_id,
+                                            "validator_index" => validator_index,
+                                            "slot" => slot,
+                                            "subnet_id" => subcommittee_index,
+                                            // log full selection proof for debugging
+                                            "full selection proof" => ?proof,
                                         );
 
                                         // Store the proof
                                         duty.aggregation_duties
                                             .proofs
                                             .write()
-                                            .insert((selection.slot, subnet_id), proof);
+                                            .insert((slot, subcommittee_index.into()), proof);
                                     }
                                 }
                                 Ok(false) => {
@@ -688,8 +694,8 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                     warn!(
                                         log,
                                         "Error determining is_aggregator";
-                                        "validator_index" => selection.validator_index,
-                                        "slot" => selection.slot,
+                                        "validator_index" => validator_index,
+                                        "slot" => slot,
                                         "error" => ?e,
                                     );
                                 }
