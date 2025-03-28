@@ -1130,7 +1130,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
             // Require peers on all sampling column subnets before sending batches
             let peers_on_all_custody_subnets = network
                 .network_globals()
-                .sampling_subnets
+                .sampling_subnets(epoch.start_slot(T::EthSpec::slots_per_epoch()))
                 .iter()
                 .all(|subnet_id| {
                     let peer_count = network

@@ -383,8 +383,9 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     );
                     // Attempt reconstruction here before notifying sync, to avoid sending out more requests
                     // that we may no longer need.
-                    if let Some(availability) =
-                        self.attempt_data_column_reconstruction(block_root).await
+                    if let Some(availability) = self
+                        .attempt_data_column_reconstruction(block_root, slot)
+                        .await
                     {
                         result = Ok(availability)
                     }

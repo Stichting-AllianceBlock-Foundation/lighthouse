@@ -927,7 +927,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         block_root: Hash256,
         publish_blobs: bool,
     ) {
-        let is_supernode = self.network_globals.is_supernode();
+        let is_supernode = self.network_globals.is_supernode(block.slot());
 
         let self_cloned = self.clone();
         let publish_fn = move |blobs_or_data_column| {
@@ -1008,9 +1008,10 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
     async fn attempt_data_column_reconstruction(
         self: &Arc<Self>,
         block_root: Hash256,
+        block_slot: Slot,
     ) -> Option<AvailabilityProcessingStatus> {
         // Only supernodes attempt reconstruction
-        if !self.network_globals.is_supernode() {
+        if !self.network_globals.is_supernode(block_slot) {
             return None;
         }
 

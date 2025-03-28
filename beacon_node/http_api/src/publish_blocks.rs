@@ -137,8 +137,10 @@ pub async fn publish_block<T: BeaconChainTypes, B: IntoGossipVerifiedBlock<T>>(
         spawn_build_data_sidecar_task(chain.clone(), block.clone(), unverified_blobs)?;
 
     // Gossip verify the block and blobs/data columns separately.
-    let gossip_verified_block_result = unverified_block
-        .into_gossip_verified_block(&chain, network_globals.custody_columns_count() as usize);
+    let gossip_verified_block_result = unverified_block.into_gossip_verified_block(
+        &chain,
+        network_globals.custody_columns_count(block.slot()) as usize,
+    );
     let block_root = block_root.unwrap_or_else(|| {
         gossip_verified_block_result.as_ref().map_or_else(
             |_| block.canonical_root(),
@@ -223,7 +225,7 @@ pub async fn publish_block<T: BeaconChainTypes, B: IntoGossipVerifiedBlock<T>>(
         publish_column_sidecars(network_tx, &gossip_verified_columns, &chain).map_err(|_| {
             warp_utils::reject::custom_server_error("unable to publish data column sidecars".into())
         })?;
-        let sampling_columns_indices = &network_globals.sampling_columns;
+        let sampling_columns_indices = &network_globals.sampling_columns(block.slot());
         let sampling_columns = gossip_verified_columns
             .into_iter()
             .flatten()

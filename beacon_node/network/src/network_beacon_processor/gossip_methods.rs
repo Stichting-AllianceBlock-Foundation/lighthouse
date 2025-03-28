@@ -1128,6 +1128,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
     ) {
         let processing_start_time = Instant::now();
         let block_root = verified_data_column.block_root();
+        let block_slot = verified_data_column.slot();
         let data_column_slot = verified_data_column.slot();
         let data_column_index = verified_data_column.id().index;
 
@@ -1159,7 +1160,8 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                         "Processed data column, waiting for other components"
                     );
 
-                    self.attempt_data_column_reconstruction(block_root).await;
+                    self.attempt_data_column_reconstruction(block_root, block_slot)
+                        .await;
                 }
             },
             Err(BlockError::DuplicateFullyImported(_)) => {
@@ -1259,7 +1261,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             .clone()
             .verify_block_for_gossip(
                 block.clone(),
-                self.network_globals.custody_columns_count() as usize,
+                self.network_globals.custody_columns_count(block.slot()) as usize,
             )
             .await;
 

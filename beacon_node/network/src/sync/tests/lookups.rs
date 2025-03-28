@@ -1203,11 +1203,12 @@ impl TestRig {
             payload_verification_status: PayloadVerificationStatus::Verified,
             is_valid_merge_transition_block: false,
         };
+        let block_slot = block.slot();
         let executed_block = AvailabilityPendingExecutedBlock::new(
             block,
             import_data,
             payload_verification_outcome,
-            self.network_globals.custody_columns_count() as usize,
+            self.network_globals.custody_columns_count(block_slot) as usize,
         );
         match self
             .harness

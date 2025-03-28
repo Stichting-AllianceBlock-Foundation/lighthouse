@@ -394,12 +394,13 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             id: self.next_id(),
             requester,
         };
+        let request_start_slot = Slot::new(*request.start_slot());
 
         // Compute custody column peers before sending the blocks_by_range request. If we don't have
         // enough peers, error here.
         let data_column_requests = if matches!(batch_type, ByRangeRequestType::BlocksAndColumns) {
-            let column_indexes = self.network_globals().sampling_columns.clone();
-            Some(self.make_columns_by_range_requests(request.clone(), &column_indexes)?)
+            let column_indexes = self.network_globals().sampling_columns(request_start_slot);
+            Some(self.make_columns_by_range_requests(request.clone(), column_indexes)?)
         } else {
             None
         };
@@ -430,10 +431,8 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             Some((
                 data_column_requests,
                 self.network_globals()
-                    .sampling_columns
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>(),
+                    .sampling_columns(request_start_slot)
+                    .to_vec(),
             ))
         } else {
             None
@@ -448,7 +447,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
     fn make_columns_by_range_requests(
         &self,
         request: BlocksByRangeRequest,
-        custody_indexes: &HashSet<ColumnIndex>,
+        custody_indexes: &[ColumnIndex],
     ) -> Result<HashMap<PeerId, DataColumnsByRangeRequest>, RpcRequestSendError> {
         let mut peer_id_to_request_map = HashMap::new();
 
@@ -763,6 +762,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         &mut self,
         lookup_id: SingleLookupId,
         block_root: Hash256,
+        block_slot: Slot,
         lookup_peers: Arc<RwLock<HashSet<PeerId>>>,
     ) -> Result<LookupRequestResult, RpcRequestSendError> {
         let span = span!(
@@ -781,9 +781,9 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         // Include only the blob indexes not yet imported (received through gossip)
         let custody_indexes_to_fetch = self
             .network_globals()
-            .sampling_columns
-            .clone()
-            .into_iter()
+            .sampling_columns(block_slot)
+            .iter()
+            .copied()
             .filter(|index| !custody_indexes_imported.contains(index))
             .collect::<Vec<_>>();
 

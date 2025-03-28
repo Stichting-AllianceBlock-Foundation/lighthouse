@@ -40,7 +40,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, instrument, trace, warn};
 use types::{
-    consts::altair::SYNC_COMMITTEE_SUBNET_COUNT, EnrForkId, EthSpec, ForkContext, Slot, SubnetId,
+    consts::altair::SYNC_COMMITTEE_SUBNET_COUNT, EnrForkId, Epoch, EthSpec, ForkContext, Slot,
+    SubnetId,
 };
 use types::{ChainSpec, ForkName};
 use utils::{build_transport, strip_peer_id, Context as ServiceContext};
@@ -819,10 +820,18 @@ impl<E: EthSpec> Network<E> {
             }
         }
 
+        let fork_epoch = self
+            .fork_context
+            .spec
+            .fork_epoch(new_fork)
+            .unwrap_or(Epoch::new(0));
+
         // Subscribe to core topics for the new fork
         for kind in core_topics_to_subscribe::<E>(
             new_fork,
-            &self.network_globals.as_topic_config(),
+            &self
+                .network_globals
+                .as_topic_config(fork_epoch.start_slot(E::slots_per_epoch())),
             &self.fork_context.spec,
         ) {
             let topic = GossipTopic::new(kind, GossipEncoding::default(), new_fork_digest);
@@ -1350,20 +1359,14 @@ impl<E: EthSpec> Network<E> {
             .expect("Local discovery must have sync committee bitfield");
 
         // write lock scope
-        let mut meta_data_w = self.network_globals.local_metadata.write();
+        self.network_globals
+            .update_metadata_bitfields(local_attnets, local_syncnets);
 
-        *meta_data_w.seq_number_mut() += 1;
-        *meta_data_w.attnets_mut() = local_attnets;
-        if let Ok(syncnets) = meta_data_w.syncnets_mut() {
-            *syncnets = local_syncnets;
-        }
-        let seq_number = *meta_data_w.seq_number();
-        let meta_data = meta_data_w.clone();
-
-        drop(meta_data_w);
-        self.eth2_rpc_mut().update_seq_number(seq_number);
+        let metadata = self.network_globals.local_metadata();
+        self.eth2_rpc_mut()
+            .update_seq_number(*metadata.seq_number());
         // Save the updated metadata to disk
-        utils::save_metadata_to_disk(&self.network_dir, meta_data);
+        utils::save_metadata_to_disk(&self.network_dir, metadata);
     }
 
     /// Sends a Ping request to the peer.
@@ -1411,7 +1414,7 @@ impl<E: EthSpec> Network<E> {
         request_id: rpc::RequestId,
         peer_id: PeerId,
     ) {
-        let metadata = self.network_globals.local_metadata.read().clone();
+        let metadata = self.network_globals.local_metadata();
         // The encoder is responsible for sending the negotiated version of the metadata
         let event = RpcResponse::Success(RpcSuccessResponse::MetaData(Arc::new(metadata)));
         self.eth2_rpc_mut()

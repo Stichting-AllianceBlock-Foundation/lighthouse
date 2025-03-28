@@ -2922,7 +2922,7 @@ pub fn serve<T: BeaconChainTypes>(
                         p2p_addresses,
                         discovery_addresses,
                         metadata: from_meta_data::<T::EthSpec>(
-                            &network_globals.local_metadata,
+                            &network_globals.local_metadata(),
                             &chain.spec,
                         ),
                     }))
@@ -4816,11 +4816,7 @@ pub fn serve<T: BeaconChainTypes>(
     Ok(http_server)
 }
 
-fn from_meta_data<E: EthSpec>(
-    meta_data: &RwLock<MetaData<E>>,
-    spec: &ChainSpec,
-) -> api_types::MetaData {
-    let meta_data = meta_data.read();
+fn from_meta_data<E: EthSpec>(meta_data: &MetaData<E>, spec: &ChainSpec) -> api_types::MetaData {
     let format_hex = |bytes: &[u8]| format!("0x{}", hex::encode(bytes));
 
     let seq_number = *meta_data.seq_number();

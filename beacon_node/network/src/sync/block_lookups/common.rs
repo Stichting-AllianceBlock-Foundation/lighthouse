@@ -13,7 +13,7 @@ use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::sync::Arc;
 use types::blob_sidecar::FixedBlobSidecarList;
-use types::{DataColumnSidecarList, SignedBeaconBlock};
+use types::{DataColumnSidecarList, SignedBeaconBlock, Slot};
 
 use super::single_block_lookup::{ComponentRequests, DownloadResult};
 use super::SingleLookupId;
@@ -45,6 +45,7 @@ pub trait RequestState<T: BeaconChainTypes> {
         id: Id,
         lookup_peers: Arc<RwLock<HashSet<PeerId>>>,
         expected_blobs: usize,
+        block_slot: Slot,
         cx: &mut SyncNetworkContext<T>,
     ) -> Result<LookupRequestResult, LookupRequestError>;
 
@@ -80,6 +81,7 @@ impl<T: BeaconChainTypes> RequestState<T> for BlockRequestState<T::EthSpec> {
         id: SingleLookupId,
         lookup_peers: Arc<RwLock<HashSet<PeerId>>>,
         _: usize,
+        _: Slot,
         cx: &mut SyncNetworkContext<T>,
     ) -> Result<LookupRequestResult, LookupRequestError> {
         cx.block_lookup_request(id, lookup_peers, self.requested_block_root)
@@ -128,6 +130,7 @@ impl<T: BeaconChainTypes> RequestState<T> for BlobRequestState<T::EthSpec> {
         id: Id,
         lookup_peers: Arc<RwLock<HashSet<PeerId>>>,
         expected_blobs: usize,
+        _: Slot,
         cx: &mut SyncNetworkContext<T>,
     ) -> Result<LookupRequestResult, LookupRequestError> {
         cx.blob_lookup_request(id, lookup_peers, self.block_root, expected_blobs)
@@ -155,7 +158,7 @@ impl<T: BeaconChainTypes> RequestState<T> for BlobRequestState<T::EthSpec> {
     fn request_state_mut(request: &mut SingleBlockLookup<T>) -> Result<&mut Self, &'static str> {
         match &mut request.component_requests {
             ComponentRequests::WaitingForBlock => Err("waiting for block"),
-            ComponentRequests::ActiveBlobRequest(request, _) => Ok(request),
+            ComponentRequests::ActiveBlobRequest(request, ..) => Ok(request),
             ComponentRequests::ActiveCustodyRequest { .. } => Err("expecting custody request"),
             ComponentRequests::NotNeeded { .. } => Err("not needed"),
         }
@@ -176,9 +179,10 @@ impl<T: BeaconChainTypes> RequestState<T> for CustodyRequestState<T::EthSpec> {
         id: Id,
         lookup_peers: Arc<RwLock<HashSet<PeerId>>>,
         _: usize,
+        block_slot: Slot,
         cx: &mut SyncNetworkContext<T>,
     ) -> Result<LookupRequestResult, LookupRequestError> {
-        cx.custody_lookup_request(id, self.block_root, lookup_peers)
+        cx.custody_lookup_request(id, self.block_root, block_slot, lookup_peers)
             .map_err(LookupRequestError::SendFailedNetwork)
     }
 
@@ -210,7 +214,7 @@ impl<T: BeaconChainTypes> RequestState<T> for CustodyRequestState<T::EthSpec> {
         match &mut request.component_requests {
             ComponentRequests::WaitingForBlock => Err("waiting for block"),
             ComponentRequests::ActiveBlobRequest { .. } => Err("expecting blob request"),
-            ComponentRequests::ActiveCustodyRequest(request) => Ok(request),
+            ComponentRequests::ActiveCustodyRequest(request, ..) => Ok(request),
             ComponentRequests::NotNeeded { .. } => Err("not needed"),
         }
     }

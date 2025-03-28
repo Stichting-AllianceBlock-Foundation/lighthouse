@@ -75,8 +75,8 @@ pub struct SingleBlockLookup<T: BeaconChainTypes> {
 #[derive(Debug)]
 pub(crate) enum ComponentRequests<E: EthSpec> {
     WaitingForBlock,
-    ActiveBlobRequest(BlobRequestState<E>, usize),
-    ActiveCustodyRequest(CustodyRequestState<E>),
+    ActiveBlobRequest(BlobRequestState<E>, usize, Slot),
+    ActiveCustodyRequest(CustodyRequestState<E>, usize, Slot),
     // When printing in debug this state display the reason why it's not needed
     #[allow(dead_code)]
     NotNeeded(&'static str),
@@ -161,8 +161,10 @@ impl<T: BeaconChainTypes> SingleBlockLookup<T> {
         self.block_request_state.state.is_processed()
             && match &self.component_requests {
                 ComponentRequests::WaitingForBlock => false,
-                ComponentRequests::ActiveBlobRequest(request, _) => request.state.is_processed(),
-                ComponentRequests::ActiveCustodyRequest(request) => request.state.is_processed(),
+                ComponentRequests::ActiveBlobRequest(request, ..) => request.state.is_processed(),
+                ComponentRequests::ActiveCustodyRequest(request, ..) => {
+                    request.state.is_processed()
+                }
                 ComponentRequests::NotNeeded { .. } => true,
             }
     }
@@ -176,10 +178,10 @@ impl<T: BeaconChainTypes> SingleBlockLookup<T> {
                 // check if the`block_request_state.state.is_awaiting_event(). However we already
                 // checked that above, so `WaitingForBlock => false` is equivalent.
                 ComponentRequests::WaitingForBlock => false,
-                ComponentRequests::ActiveBlobRequest(request, _) => {
+                ComponentRequests::ActiveBlobRequest(request, ..) => {
                     request.state.is_awaiting_event()
                 }
-                ComponentRequests::ActiveCustodyRequest(request) => {
+                ComponentRequests::ActiveCustodyRequest(request, ..) => {
                     request.state.is_awaiting_event()
                 }
                 ComponentRequests::NotNeeded { .. } => false,
@@ -193,7 +195,7 @@ impl<T: BeaconChainTypes> SingleBlockLookup<T> {
         cx: &mut SyncNetworkContext<T>,
     ) -> Result<LookupResult, LookupRequestError> {
         // TODO: Check what's necessary to download, specially for blobs
-        self.continue_request::<BlockRequestState<T::EthSpec>>(cx, 0)?;
+        self.continue_request::<BlockRequestState<T::EthSpec>>(cx, 0, Slot::new(0))?;
 
         if let ComponentRequests::WaitingForBlock = self.component_requests {
             let downloaded_block = self
@@ -213,6 +215,7 @@ impl<T: BeaconChainTypes> SingleBlockLookup<T> {
                 }
             }) {
                 let expected_blobs = block.num_expected_blobs();
+                let block_slot = block.slot();
                 let block_epoch = block.slot().epoch(T::EthSpec::slots_per_epoch());
                 if expected_blobs == 0 {
                     self.component_requests = ComponentRequests::NotNeeded("no data");
@@ -220,10 +223,13 @@ impl<T: BeaconChainTypes> SingleBlockLookup<T> {
                     self.component_requests = ComponentRequests::ActiveBlobRequest(
                         BlobRequestState::new(self.block_root),
                         expected_blobs,
+                        block_slot,
                     );
                 } else if cx.chain.should_fetch_custody_columns(block_epoch) {
                     self.component_requests = ComponentRequests::ActiveCustodyRequest(
                         CustodyRequestState::new(self.block_root),
+                        expected_blobs,
+                        block_slot,
                     );
                 } else {
                     self.component_requests = ComponentRequests::NotNeeded("outside da window");
@@ -244,11 +250,19 @@ impl<T: BeaconChainTypes> SingleBlockLookup<T> {
 
         match &self.component_requests {
             ComponentRequests::WaitingForBlock => {} // do nothing
-            ComponentRequests::ActiveBlobRequest(_, expected_blobs) => {
-                self.continue_request::<BlobRequestState<T::EthSpec>>(cx, *expected_blobs)?
+            ComponentRequests::ActiveBlobRequest(_, expected_blobs, block_slot) => {
+                self.continue_request::<BlobRequestState<T::EthSpec>>(
+                    cx,
+                    *expected_blobs,
+                    *block_slot,
+                )?
             }
-            ComponentRequests::ActiveCustodyRequest(_) => {
-                self.continue_request::<CustodyRequestState<T::EthSpec>>(cx, 0)?
+            ComponentRequests::ActiveCustodyRequest(_, expected_blobs, block_slot) => {
+                self.continue_request::<CustodyRequestState<T::EthSpec>>(
+                    cx,
+                    *expected_blobs,
+                    *block_slot,
+                )?
             }
             ComponentRequests::NotNeeded { .. } => {} // do nothing
         }
@@ -268,6 +282,7 @@ impl<T: BeaconChainTypes> SingleBlockLookup<T> {
         &mut self,
         cx: &mut SyncNetworkContext<T>,
         expected_blobs: usize,
+        block_slot: Slot,
     ) -> Result<(), LookupRequestError> {
         let id = self.id;
         let awaiting_parent = self.awaiting_parent.is_some();
@@ -287,7 +302,7 @@ impl<T: BeaconChainTypes> SingleBlockLookup<T> {
             let request = R::request_state_mut(self)
                 .map_err(|e| LookupRequestError::BadState(e.to_owned()))?;
 
-            match request.make_request(id, peers, expected_blobs, cx)? {
+            match request.make_request(id, peers, expected_blobs, block_slot, cx)? {
                 LookupRequestResult::RequestSent(req_id) => {
                     // Lookup sync event safety: If make_request returns `RequestSent`, we are
                     // guaranteed that `BlockLookups::on_download_response` will be called exactly
