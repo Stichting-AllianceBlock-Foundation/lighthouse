@@ -34,7 +34,6 @@ use libp2p::upnp::tokio::Behaviour as Upnp;
 use libp2p::{identify, PeerId, SwarmBuilder};
 use logging::crit;
 use std::num::{NonZeroU8, NonZeroUsize};
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -153,7 +152,6 @@ pub struct Network<E: EthSpec> {
     // lookups for every gossipsub message send.
     enr_fork_id: EnrForkId,
     /// Directory where metadata is stored.
-    network_dir: PathBuf,
     fork_context: Arc<ForkContext>,
     /// Gossipsub score parameters.
     score_settings: PeerScoreSettings<E>,
@@ -199,15 +197,8 @@ impl<E: EthSpec> Network<E> {
         )?;
 
         // Construct the metadata
-        let custody_group_count = ctx.chain_spec.is_peer_das_scheduled().then(|| {
-            ctx.chain_spec
-                .custody_group_count(config.subscribe_all_data_column_subnets)
-        });
-        let meta_data = utils::load_or_build_metadata(&config.network_dir, custody_group_count);
-        let seq_number = *meta_data.seq_number();
         let globals = NetworkGlobals::new(
             enr,
-            meta_data,
             trusted_peers,
             config.disable_peer_scoring,
             config.clone(),
@@ -369,6 +360,7 @@ impl<E: EthSpec> Network<E> {
             ttfb_timeout: ctx.chain_spec.ttfb_timeout(),
             resp_timeout: ctx.chain_spec.resp_timeout(),
         };
+        let seq_number = *network_globals.local_metadata().seq_number();
         let eth2_rpc = RPC::new(
             ctx.fork_context.clone(),
             config.enable_light_client_server,
@@ -505,7 +497,6 @@ impl<E: EthSpec> Network<E> {
             swarm,
             network_globals,
             enr_fork_id,
-            network_dir: config.network_dir.clone(),
             fork_context: ctx.fork_context,
             score_settings,
             update_gossipsub_scores,
@@ -1257,8 +1248,11 @@ impl<E: EthSpec> Network<E> {
         if let Err(e) = self.discovery_mut().update_enr_bitfield(subnet_id, value) {
             crit!(error = e, "Could not update ENR bitfield");
         }
-        // update the local meta data which informs our peers of the update during PINGS
-        self.update_metadata_bitfields();
+
+        // TODO: Can we deprecate this for a single source of truth?
+        let metadata = self.network_globals.local_metadata();
+        self.eth2_rpc_mut()
+            .update_seq_number(*metadata.seq_number());
     }
 
     /// Attempts to discover new peers for a given subnet. The `min_ttl` gives the time at which we
@@ -1337,37 +1331,6 @@ impl<E: EthSpec> Network<E> {
     }
 
     /* Private internal functions */
-
-    /// Updates the current meta data of the node to match the local ENR.
-    #[instrument(parent = None,
-        level = "trace",
-        fields(service = "libp2p"),
-        name = "libp2p",
-        skip_all
-    )]
-    fn update_metadata_bitfields(&mut self) {
-        let local_attnets = self
-            .discovery_mut()
-            .local_enr()
-            .attestation_bitfield::<E>()
-            .expect("Local discovery must have attestation bitfield");
-
-        let local_syncnets = self
-            .discovery_mut()
-            .local_enr()
-            .sync_committee_bitfield::<E>()
-            .expect("Local discovery must have sync committee bitfield");
-
-        // write lock scope
-        self.network_globals
-            .update_metadata_bitfields(local_attnets, local_syncnets);
-
-        let metadata = self.network_globals.local_metadata();
-        self.eth2_rpc_mut()
-            .update_seq_number(*metadata.seq_number());
-        // Save the updated metadata to disk
-        utils::save_metadata_to_disk(&self.network_dir, metadata);
-    }
 
     /// Sends a Ping request to the peer.
     #[instrument(parent = None,

@@ -288,6 +288,9 @@ impl<Id: ReqId, E: EthSpec> RPC<Id, E> {
         name = "libp2p_rpc",
         skip_all
     )]
+    // TODO: Check who uses this, and pass seq_number as a parameter
+    // Introduced here, but I don't follow why we can't read it from network globals
+    // https://github.com/sigp/lighthouse/pull/6400
     pub fn ping(&mut self, peer_id: PeerId, id: Id) {
         let ping = Ping {
             data: self.seq_number,

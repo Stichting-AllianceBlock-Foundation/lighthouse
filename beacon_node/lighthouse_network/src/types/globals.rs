@@ -1,7 +1,8 @@
 //! A collection of variables that are accessible outside of the network thread itself.
 use super::TopicConfig;
+use crate::discovery::enr::Eth2Enr;
 use crate::peer_manager::peerdb::PeerDB;
-use crate::rpc::{MetaData, MetaDataV3};
+use crate::rpc::{MetaData, MetaDataV2, MetaDataV3};
 use crate::types::{BackFillState, SyncState};
 use crate::{Client, Enr, EnrExt, GossipTopic, Multiaddr, NetworkConfig, PeerId};
 use parking_lot::RwLock;
@@ -10,19 +11,17 @@ use std::sync::Arc;
 use types::data_column_custody_group::{
     compute_columns_for_custody_group, compute_subnets_from_custody_group, get_custody_groups,
 };
-use types::{BitVector, ChainSpec, ColumnIndex, DataColumnSubnetId, EthSpec, Slot};
+use types::{ChainSpec, ColumnIndex, DataColumnSubnetId, EthSpec, Slot};
 
 pub struct NetworkGlobals<E: EthSpec> {
     /// The current local ENR.
-    pub local_enr: RwLock<Enr>,
+    local_enr: RwLock<Enr>,
     /// The local peer_id.
     pub peer_id: RwLock<PeerId>,
     /// Listening multiaddrs.
     pub listen_multiaddrs: RwLock<Vec<Multiaddr>>,
     /// The collection of known peers.
     pub peers: RwLock<PeerDB<E>>,
-    // The local meta data of our node.
-    local_metadata: RwLock<MetaData<E>>,
     /// The current gossipsub topic subscriptions.
     pub gossipsub_subscriptions: RwLock<HashSet<GossipTopic>>,
     /// The current sync status of the node.
@@ -47,7 +46,6 @@ struct CustodyGroupCount {
 impl<E: EthSpec> NetworkGlobals<E> {
     pub fn new(
         enr: Enr,
-        local_metadata: MetaData<E>,
         trusted_peers: Vec<PeerId>,
         disable_peer_scoring: bool,
         config: Arc<NetworkConfig>,
@@ -78,7 +76,6 @@ impl<E: EthSpec> NetworkGlobals<E> {
             local_enr: RwLock::new(enr.clone()),
             peer_id: RwLock::new(enr.peer_id()),
             listen_multiaddrs: RwLock::new(Vec::new()),
-            local_metadata: RwLock::new(local_metadata),
             peers: RwLock::new(PeerDB::new(trusted_peers, disable_peer_scoring)),
             gossipsub_subscriptions: RwLock::new(HashSet::new()),
             sync_state: RwLock::new(SyncState::Stalled),
@@ -98,13 +95,38 @@ impl<E: EthSpec> NetworkGlobals<E> {
         self.local_enr.read().clone()
     }
 
+    pub fn set_enr(&self, enr: Enr) {
+        *self.local_enr.write() = enr;
+    }
+
     /// Returns the local libp2p PeerID.
     pub fn local_peer_id(&self) -> PeerId {
         *self.peer_id.read()
     }
 
     pub fn local_metadata(&self) -> MetaData<E> {
-        todo!();
+        let enr = self.local_enr();
+        let attnets = enr
+            .attestation_bitfield::<E>()
+            .unwrap_or(Default::default());
+        let syncnets = enr
+            .sync_committee_bitfield::<E>()
+            .unwrap_or(Default::default());
+
+        if self.spec.is_peer_das_scheduled() {
+            MetaData::V3(MetaDataV3 {
+                seq_number: enr.seq(),
+                attnets,
+                syncnets,
+                custody_group_count: self.public_custody_group_count(),
+            })
+        } else {
+            MetaData::V2(MetaDataV2 {
+                seq_number: enr.seq(),
+                attnets,
+                syncnets,
+            })
+        }
     }
 
     /// Returns the list of `Multiaddr` that the underlying libp2p instance is listening on.
@@ -129,6 +151,10 @@ impl<E: EthSpec> NetworkGlobals<E> {
         &self.all_sampling_columns[..self.all_sampling_columns.len().min(cgc)]
     }
 
+    fn public_custody_group_count(&self) -> u64 {
+        todo!();
+    }
+
     /// Returns the custody group count (CGC)
     fn custody_group_count(&self, slot: Slot) -> u64 {
         let cgc = self.custody_group_count.read().value;
@@ -141,20 +167,6 @@ impl<E: EthSpec> NetworkGlobals<E> {
         self.spec
             .sampling_size(self.custody_group_count(slot))
             .expect("should compute node sampling size from valid chain spec")
-    }
-
-    pub fn update_metadata_bitfields(
-        &self,
-        local_attnets: BitVector<E::SubnetBitfieldLength>,
-        local_syncnets: BitVector<E::SyncCommitteeSubnetCount>,
-    ) {
-        let mut meta_data_w = self.local_metadata.write();
-
-        *meta_data_w.seq_number_mut() += 1;
-        *meta_data_w.attnets_mut() = local_attnets;
-        if let Ok(syncnets) = meta_data_w.syncnets_mut() {
-            *syncnets = local_syncnets;
-        }
     }
 
     /// Returns the number of libp2p connected peers.
@@ -245,7 +257,8 @@ impl<E: EthSpec> NetworkGlobals<E> {
 
     pub(crate) fn new_test_globals_with_metadata(
         trusted_peers: Vec<PeerId>,
-        metadata: MetaData<E>,
+        // TODO: todo! Apply to enr
+        _metadata: MetaData<E>,
         config: Arc<NetworkConfig>,
         spec: Arc<ChainSpec>,
     ) -> NetworkGlobals<E> {
@@ -253,7 +266,7 @@ impl<E: EthSpec> NetworkGlobals<E> {
         let keypair = libp2p::identity::secp256k1::Keypair::generate();
         let enr_key: discv5::enr::CombinedKey = discv5::enr::CombinedKey::from_secp256k1(&keypair);
         let enr = discv5::enr::Enr::builder().build(&enr_key).unwrap();
-        NetworkGlobals::new(enr, metadata, trusted_peers, false, config, spec)
+        NetworkGlobals::new(enr, trusted_peers, false, config, spec)
     }
 }
 

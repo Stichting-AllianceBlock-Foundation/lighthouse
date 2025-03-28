@@ -209,7 +209,7 @@ impl<E: EthSpec> Discovery<E> {
             None => String::from(""),
         };
 
-        let local_enr = network_globals.local_enr.read().clone();
+        let local_enr = network_globals.local_enr();
         let local_node_id = local_enr.node_id();
 
         info!(
@@ -420,7 +420,7 @@ impl<E: EthSpec> Discovery<E> {
             .map_err(|e| format!("{:?}", e))?;
 
         // replace the global version
-        *self.network_globals.local_enr.write() = self.discv5.local_enr();
+        self.network_globals.set_enr(self.discv5.local_enr());
         // persist modified enr to disk
         enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
         Ok(true)
@@ -456,7 +456,7 @@ impl<E: EthSpec> Discovery<E> {
             .map_err(|e| format!("{:?}", e))?;
 
         // replace the global version
-        *self.network_globals.local_enr.write() = self.discv5.local_enr();
+        self.network_globals.set_enr(self.discv5.local_enr());
         // persist modified enr to disk
         enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
         Ok(true)
@@ -472,7 +472,7 @@ impl<E: EthSpec> Discovery<E> {
             // persist modified enr to disk
             enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
         }
-        *self.network_globals.local_enr.write() = self.discv5.local_enr();
+        self.network_globals.set_enr(self.discv5.local_enr());
         Ok(())
     }
 
@@ -553,7 +553,7 @@ impl<E: EthSpec> Discovery<E> {
         }
 
         // replace the global version
-        *self.network_globals.local_enr.write() = self.discv5.local_enr();
+        self.network_globals.set_enr(self.discv5.local_enr());
 
         // persist modified enr to disk
         enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
@@ -588,7 +588,7 @@ impl<E: EthSpec> Discovery<E> {
             });
 
         // replace the global version with discovery version
-        *self.network_globals.local_enr.write() = self.discv5.local_enr();
+        self.network_globals.set_enr(self.discv5.local_enr());
 
         // persist modified enr to disk
         enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
@@ -1060,7 +1060,7 @@ impl<E: EthSpec> NetworkBehaviour for Discovery<E> {
                             let enr = self.discv5.local_enr();
                             enr::save_enr_to_disk(Path::new(&self.enr_dir), &enr);
                             // update  network globals
-                            *self.network_globals.local_enr.write() = enr;
+                            self.network_globals.set_enr(enr);
                             // A new UDP socket has been detected.
                             // NOTE: We assume libp2p itself can keep track of IP changes and we do
                             // not inform it about IP changes found via discovery.
@@ -1194,7 +1194,6 @@ impl<E: EthSpec> Discovery<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::methods::{MetaData, MetaDataV2};
     use libp2p::identity::secp256k1;
     use types::{BitVector, MinimalEthSpec, SubnetId};
 
@@ -1208,18 +1207,7 @@ mod tests {
         let config = Arc::new(config);
         let enr_key: CombinedKey = CombinedKey::from_secp256k1(&keypair);
         let enr: Enr = build_enr::<E>(&enr_key, &config, &EnrForkId::default(), &spec).unwrap();
-        let globals = NetworkGlobals::new(
-            enr,
-            MetaData::V2(MetaDataV2 {
-                seq_number: 0,
-                attnets: Default::default(),
-                syncnets: Default::default(),
-            }),
-            vec![],
-            false,
-            config.clone(),
-            spec.clone(),
-        );
+        let globals = NetworkGlobals::new(enr, vec![], false, config.clone(), spec.clone());
         let keypair = keypair.into();
         Discovery::new(keypair, &config, Arc::new(globals), &spec)
             .await
