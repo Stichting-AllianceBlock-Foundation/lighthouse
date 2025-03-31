@@ -132,7 +132,6 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
     spec: &ChainSpec,
     distributed: bool,
     beacon_nodes: &Arc<BeaconNodeFallback<T, E>>,
-    duties_service: &DutiesService<T, E>,
 ) -> Result<Option<SelectionProof>, Error> {
     let selection_proof = if distributed {
         // Submit a partial selection proof in the data field of the POST HTTP endpoint
@@ -147,14 +146,12 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
         };
         // Call the endpoint /eth/v1/validator/beacon_committee_selections
         // The middleware should return a full selection proof here
-        let log = duties_service.context.log();
         let response = beacon_nodes
             .first_success(|beacon_node| {
                 let selections = selection.clone();
                 debug!(
-                    log,
-                    "Partial selection proof from VC";
-                    "Selection proof" => ?selections,
+                    "Selection proof" = ?selections,
+                    "Partial selection proof from VC"
                 );
                 // println!("Selection proof: {:?}", selections);
                 async move {
@@ -162,12 +159,7 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                         .post_validator_beacon_committee_selections(&[selections])
                         .await;
 
-                    debug!(
-                        log,
-                        "Response from middleware";
-                        "response" => ?response,
-
-                    );
+                    debug!(?response, "Response from middleware");
                     // println!("Response from middleware {:?}", response);
 
                     response
@@ -1147,7 +1139,6 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                             &duties_service.spec,
                             duties_service.distributed,
                             &duties_service.beacon_nodes,
-                            &duties_service,
                         )
                         .await?;
                         Ok((duty, opt_selection_proof))
@@ -1163,7 +1154,6 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                             &duties_service.spec,
                             duties_service.distributed,
                             &duties_service.beacon_nodes,
-                            &duties_service,
                         )
                         .await?;
                         Ok((duty, opt_selection_proof))

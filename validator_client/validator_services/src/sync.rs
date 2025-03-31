@@ -524,9 +524,8 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                     Ok(subnet_ids) => subnet_ids,
                     Err(e) => {
                         crit!(
-                            log,
-                            "Arithmetic error computing subnet IDs";
-                            "error" => ?e,
+                            "error" = ?e,
+                            "Arithmetic error computing subnet IDs"
                         );
                         continue;
                     }
@@ -563,31 +562,28 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                 };
                                 // Add log for debugging
                                 debug!(
-                                    log,
-                                    "Partial sync selection proof";
-                                    "validator_index" => duty.validator_index,
-                                    "slot" => proof_slot,
-                                    "subcommittee_index" => subnet_id,
-                                    "partial selection proof"  => ?proof,
+                                    "validator_index" = duty.validator_index,
+                                    "slot" = %proof_slot,
+                                    "subcommittee_index" = subnet_id,
+                                    "partial selection proof"  = ?proof,
+                                    "Partial sync selection proof"
                                 );
                                 Some(sync_committee_selection)
                             }
                             Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
                                 debug!(
-                                    log,
-                                    "Missing pubkey for sync selection proof";
-                                    "pubkey" => ?pubkey,
-                                    "slot" => proof_slot,
+                                    ?pubkey,
+                                    "slot" = %proof_slot,
+                                    "Missing pubkey for sync selection proof"
                                 );
                                 None
                             }
                             Err(e) => {
                                 warn!(
-                                    log,
-                                    "Unable to sign selection proof";
-                                    "error" => ?e,
-                                    "pubkey" => ?duty.pubkey,
-                                    "slot" => proof_slot,
+                                    "error" = ?e,
+                                    "pubkey" = ?duty.pubkey,
+                                    "slot" = %proof_slot,
+                                    "Unable to sign selection proof"
                                 );
                                 None
                             }
@@ -606,10 +602,8 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
             // If we have any valid proofs, send them to the middleware
             if !selection_proofs.is_empty() {
                 debug!(
-                    log,
-                    "Sending batch of partial sync selection proofs";
-                    "count" => selection_proofs.len(),
-                    "slot" => slot,
+                    "count" = selection_proofs.len(),
+                    %slot, "Sending batch of partial sync selection proofs"
                 );
 
                 let response = duties_service
@@ -627,20 +621,14 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                 match response {
                     Ok(response) => {
                         debug!(
-                            log,
-                            "Received batch response from middleware for sync";
-                            "count" => response.data.len(),
-                            "slot" => slot,
+                            "count" = response.data.len(),
+                            %slot, "Received batch response from middleware for sync"
                         );
 
                         // Get the sync map to update duties
                         let sync_map = duties_service.sync_duties.committees.read();
                         let Some(committee_duties) = sync_map.get(&sync_committee_period) else {
-                            debug!(
-                                log,
-                                "Missing sync duties";
-                                "period" => sync_committee_period,
-                            );
+                            debug!("period" = sync_committee_period, "Missing sync duties");
                             continue;
                         };
 
@@ -662,13 +650,12 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                 Ok(true) => {
                                     if let Some(Some(duty)) = validators.get(&validator_index) {
                                         debug!(
-                                            log,
-                                            "Validator is sync aggregator";
-                                            "validator_index" => validator_index,
-                                            "slot" => slot,
-                                            "subnet_id" => subcommittee_index,
+                                            validator_index,
+                                            %slot,
+                                            "subnet_id" = subcommittee_index,
                                             // log full selection proof for debugging
-                                            "full selection proof" => ?proof,
+                                            "full selection proof" = ?proof,
+                                            "Validator is sync aggregator"
                                         );
 
                                         // Store the proof
@@ -683,11 +670,10 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                 }
                                 Err(e) => {
                                     warn!(
-                                        log,
-                                        "Error determining is_aggregator";
-                                        "validator_index" => validator_index,
-                                        "slot" => slot,
-                                        "error" => ?e,
+                                        validator_index,
+                                        %slot,
+                                        "error" = ?e,
+                                        "Error determining is_aggregator"
                                     );
                                 }
                             }
@@ -695,10 +681,9 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                     }
                     Err(e) => {
                         warn!(
-                            log,
-                            "Failed to get sync selection proofs from middleware";
-                            "error" => %e,
-                            "slot" => slot,
+                            "error" = %e,
+                            %slot,
+                            "Failed to get sync selection proofs from middleware"
                         );
                     }
                 }
@@ -711,112 +696,113 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                 if slot < *validator_start_slot {
                     continue;
                 }
-              
+
                 let subnet_ids = match duty.subnet_ids::<E>() {
-                Ok(subnet_ids) => subnet_ids,
-                Err(e) => {
-                    crit!(
-                        error = ?e,
-                        "Arithmetic error computing subnet IDs"
-                    );
-                    continue;
-                }
-            };
-
-            // Create futures to produce proofs.
-            let duties_service_ref = &duties_service;
-            let futures = subnet_ids.iter().map(|subnet_id| async move {
-                // Construct proof for prior slot.
-                let proof_slot = slot - 1;
-
-                let proof = match duties_service_ref
-                    .validator_store
-                    .produce_sync_selection_proof(&duty.pubkey, proof_slot, *subnet_id)
-                    .await
-                {
-                    Ok(proof) => proof,
-                    Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
-                        // A pubkey can be missing when a validator was recently
-                        // removed via the API.
-                        debug!(
-                            ?pubkey,
-                            pubkey = ?duty.pubkey,
-                            slot = %proof_slot,
-                            "Missing pubkey for sync selection proof"
-                        );
-                        return None;
-                    }
+                    Ok(subnet_ids) => subnet_ids,
                     Err(e) => {
-                        warn!(
+                        crit!(
                             error = ?e,
-                            pubkey = ?duty.pubkey,
-                            slot = %proof_slot,
-                            "Unable to sign selection proof"
+                            "Arithmetic error computing subnet IDs"
                         );
-                        return None;
+                        continue;
                     }
                 };
 
-                match proof.is_aggregator::<E>() {
-                    Ok(true) => {
-                        debug!(
-                            validator_index = duty.validator_index,
-                            slot = %proof_slot,
-                            %subnet_id,
-                            "Validator is sync aggregator"
-                        );
-                        Some(((proof_slot, *subnet_id), proof))
+                // Create futures to produce proofs.
+                let duties_service_ref = &duties_service;
+                let futures = subnet_ids.iter().map(|subnet_id| async move {
+                    // Construct proof for prior slot.
+                    let proof_slot = slot - 1;
+
+                    let proof = match duties_service_ref
+                        .validator_store
+                        .produce_sync_selection_proof(&duty.pubkey, proof_slot, *subnet_id)
+                        .await
+                    {
+                        Ok(proof) => proof,
+                        Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
+                            // A pubkey can be missing when a validator was recently
+                            // removed via the API.
+                            debug!(
+                                ?pubkey,
+                                pubkey = ?duty.pubkey,
+                                slot = %proof_slot,
+                                "Missing pubkey for sync selection proof"
+                            );
+                            return None;
+                        }
+                        Err(e) => {
+                            warn!(
+                                error = ?e,
+                                pubkey = ?duty.pubkey,
+                                slot = %proof_slot,
+                                "Unable to sign selection proof"
+                            );
+                            return None;
+                        }
+                    };
+
+                    match proof.is_aggregator::<E>() {
+                        Ok(true) => {
+                            debug!(
+                                validator_index = duty.validator_index,
+                                slot = %proof_slot,
+                                %subnet_id,
+                                "Validator is sync aggregator"
+                            );
+                            Some(((proof_slot, *subnet_id), proof))
+                        }
+                        Ok(false) => None,
+                        Err(e) => {
+                            warn!(
+                                pubkey = ?duty.pubkey,
+                                slot = %proof_slot,
+                                error = ?e,
+                                "Error determining is_aggregator"
+                            );
+                            None
+                        }
                     }
-                    Ok(false) => None,
-                    Err(e) => {
-                        warn!(
-                            pubkey = ?duty.pubkey,
-                            slot = %proof_slot,
-                            error = ?e,
-                            "Error determining is_aggregator"
-                        );
-                        None
-                    }
+                });
+
+                // Execute all the futures in parallel, collecting any successful results.
+                let proofs = join_all(futures)
+                    .await
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
+
+                validator_proofs.push((duty.validator_index, proofs));
+            }
+
+            // Add to global storage (we add regularly so the proofs can be used ASAP).
+            let sync_map = duties_service.sync_duties.committees.read();
+            let Some(committee_duties) = sync_map.get(&sync_committee_period) else {
+                debug!(period = sync_committee_period, "Missing sync duties");
+                continue;
+            };
+            let validators = committee_duties.validators.read();
+            let num_validators_updated = validator_proofs.len();
+
+            for (validator_index, proofs) in validator_proofs {
+                if let Some(Some(duty)) = validators.get(&validator_index) {
+                    duty.aggregation_duties.proofs.write().extend(proofs);
+                } else {
+                    debug!(
+                        validator_index,
+                        period = sync_committee_period,
+                        "Missing sync duty to update"
+                    );
                 }
-            });
+            }
 
-            // Execute all the futures in parallel, collecting any successful results.
-            let proofs = join_all(futures)
-                .await
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>();
-
-            validator_proofs.push((duty.validator_index, proofs));
-        }
-
-        // Add to global storage (we add regularly so the proofs can be used ASAP).
-        let sync_map = duties_service.sync_duties.committees.read();
-        let Some(committee_duties) = sync_map.get(&sync_committee_period) else {
-            debug!(period = sync_committee_period, "Missing sync duties");
-            continue;
-        };
-        let validators = committee_duties.validators.read();
-        let num_validators_updated = validator_proofs.len();
-
-        for (validator_index, proofs) in validator_proofs {
-            if let Some(Some(duty)) = validators.get(&validator_index) {
-                duty.aggregation_duties.proofs.write().extend(proofs);
-            } else {
+            if num_validators_updated > 0 {
                 debug!(
-                    validator_index,
-                    period = sync_committee_period,
-                    "Missing sync duty to update"
+                    %slot,
+                    updated_validators = num_validators_updated,
+                    "Finished computing sync selection proofs"
                 );
             }
-        }
-
-        if num_validators_updated > 0 {
-            debug!(
-                %slot,
-                updated_validators = num_validators_updated,
-                "Finished computing sync selection proofs"
-            );
         }
     }
 }
