@@ -137,6 +137,7 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
         let beacon_committee_selection = BeaconCommitteeSelection {
             validator_index: duty.validator_index,
             slot: duty.slot,
+            // In distributed mode, this is partial selection proof
             selection_proof: validator_store
                 .produce_selection_proof(duty.pubkey, duty.slot)
                 .await
@@ -153,7 +154,7 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                     "validator_index" = duty.validator_index,
                     "slot" = %duty.slot,
                     "partial selection proof" = ?beacon_committee_selection.selection_proof,
-                    "Sending beacon committee selection to middleware"
+                    "Sending selection to middleware"
                 );
                 async move {
                     beacon_node
@@ -173,7 +174,7 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
             "validator_index" = response_data.validator_index,
             "slot" = %response_data.slot,
             "full selection proof" = ?response_data.selection_proof,
-            "Received beacon committee selection from middleware"
+            "Received selection from middleware"
         );
         SelectionProof::from(response_data.selection_proof.clone())
     } else {
@@ -1105,6 +1106,7 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
             let lookahead_slot = current_slot + selection_lookahead;
 
             let relevant_duties = if duties_service.distributed {
+                // Remove old slot duties and only keep current duties
                 duties_by_slot
                     .remove(&lookahead_slot)
                     .map(|duties| BTreeMap::from([(lookahead_slot, duties)]))
@@ -1127,7 +1129,7 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
             );
 
             // In distributed case, we want to send all partial selection proofs to the middleware to determine aggregation duties,
-            // as the middleware will need to have a threshold of partial selection proof to be able to return the full selection proof
+            // as the middleware will need to have a threshold of partial selection proofs to be able to return the full selection proof
             // Thus, sign selection proofs in parallel in distributed case; Otherwise, sign them serially in non-distributed (normal) case
             let duty_and_proof_results = if duties_service.distributed {
                 futures::future::join_all(relevant_duties.into_values().flatten().map(
