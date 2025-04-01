@@ -527,7 +527,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                 // Construct proof for prior slot.
                 let proof_slot = slot - 1;
 
-                // Store all partial sync selection proofs in partial_proofs so that it can be sent together later
+                // Store all partial sync selection proofs so that it can be sent together later
                 sync_committee_selection.extend(subnet_ids.iter().map(|&subnet_id| {
                     let duties_service = duties_service.clone();
                     let duty = duty.clone();
@@ -586,6 +586,9 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                 .flatten()
                 .collect();
 
+            // Call the endpoint /eth/v1/validator/sync_committee_selections
+            // by sending the SyncCommitteeSelection that contains partial sync selection proof
+            // The middleware should return SyncCommitteeSelection that contains full sync selection proof
             let middleware_response = duties_service
                 .beacon_nodes
                 .first_success(|beacon_node| {
