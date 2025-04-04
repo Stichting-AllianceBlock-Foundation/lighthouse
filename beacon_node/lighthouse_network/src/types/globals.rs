@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::sync::Arc;
 use types::data_column_custody_group::{
-    compute_columns_for_custody_group, compute_subnets_from_custody_group, get_custody_groups,
+    compute_columns_from_custody_groups, compute_subnets_from_custody_groups, get_custody_groups,
 };
 use types::{CGCUpdates, ChainSpec, ColumnIndex, DataColumnSubnetId, EthSpec, Slot};
 
@@ -28,9 +28,10 @@ pub struct NetworkGlobals<E: EthSpec> {
     pub sync_state: RwLock<SyncState>,
     /// The current state of the backfill sync.
     pub backfill_state: RwLock<BackFillState>,
-    /// The computed sampling subnets and columns is stored to avoid re-computing.
-    all_sampling_subnets: Vec<DataColumnSubnetId>,
-    all_sampling_columns: Vec<ColumnIndex>,
+    /// The computed custody groups cached to avoid re-computing.
+    custody_groups_max_cgc: Vec<u64>,
+    sampling_columns_max_cgc: Vec<ColumnIndex>,
+    sampling_subnets_max_cgc: Vec<DataColumnSubnetId>,
     /// Dynamic custody group count (CGC)
     cgc_updates: RwLock<CGCUpdates>,
     /// Network-related configuration. Immutable after initialization.
@@ -52,22 +53,13 @@ impl<E: EthSpec> NetworkGlobals<E> {
 
         // The below `expect` calls will panic on start up if the chain spec config values used
         // are invalid
-        let custody_groups = get_custody_groups(node_id, spec.number_of_custody_groups, &spec)
-            .expect("should compute node custody groups");
-
-        let mut all_sampling_subnets = vec![];
-        for custody_index in &custody_groups {
-            let subnets = compute_subnets_from_custody_group(*custody_index, &spec)
-                .expect("should compute custody subnets for node");
-            all_sampling_subnets.extend(subnets);
-        }
-
-        let mut all_sampling_columns = vec![];
-        for custody_index in &custody_groups {
-            let columns = compute_columns_for_custody_group(*custody_index, &spec)
-                .expect("should compute custody columns for node");
-            all_sampling_columns.extend(columns);
-        }
+        let custody_groups_max_cgc =
+            get_custody_groups(node_id, spec.number_of_custody_groups, &spec)
+                .expect("should compute node custody groups");
+        let sampling_columns_max_cgc =
+            compute_columns_from_custody_groups(&custody_groups_max_cgc, &spec).collect::<Vec<_>>();
+        let sampling_subnets_max_cgc =
+            compute_subnets_from_custody_groups(&custody_groups_max_cgc, &spec).collect::<Vec<_>>();
 
         Ok(NetworkGlobals {
             local_enr: RwLock::new(LocalMetadata::new(enr.clone(), &spec)?),
@@ -77,8 +69,9 @@ impl<E: EthSpec> NetworkGlobals<E> {
             gossipsub_subscriptions: RwLock::new(HashSet::new()),
             sync_state: RwLock::new(SyncState::Stalled),
             backfill_state: RwLock::new(BackFillState::Paused),
-            all_sampling_subnets,
-            all_sampling_columns,
+            custody_groups_max_cgc,
+            sampling_columns_max_cgc,
+            sampling_subnets_max_cgc,
             cgc_updates: RwLock::new(cgc_updates),
             config,
             spec,
@@ -124,14 +117,24 @@ impl<E: EthSpec> NetworkGlobals<E> {
     }
 
     pub fn sampling_columns(&self, slot: Slot) -> &[ColumnIndex] {
-        let cgc = self.custody_group_count(slot) as usize;
-        // Returns as many elements as possible, can't panic as it's upper bounded by len
-        &self.all_sampling_columns[..self.all_sampling_columns.len().min(cgc)]
+        let cgc = self.custody_group_count(slot);
+        self.sampling_columns_for_cgc(cgc)
+    }
+
+    pub fn custody_groups_for_cgc(&self, cgc: u64) -> &[u64] {
+        &self.custody_groups_max_cgc[..self.custody_groups_max_cgc.len().min(cgc as usize)]
     }
 
     pub fn sampling_subnets_for_cgc(&self, cgc: u64) -> &[DataColumnSubnetId] {
-        // Returns as many elements as possible, can't panic as it's upper bounded by len
-        &self.all_sampling_subnets[..self.all_sampling_subnets.len().min(cgc as usize)]
+        // TODO(das): scale this index if custody_groups != subnet_count != column_count
+        let index = cgc as usize;
+        &self.sampling_subnets_max_cgc[..self.sampling_subnets_max_cgc.len().min(index)]
+    }
+
+    pub fn sampling_columns_for_cgc(&self, cgc: u64) -> &[ColumnIndex] {
+        // TODO(das): scale this index if custody_groups != subnet_count != column_count
+        let index = cgc as usize;
+        &self.sampling_columns_max_cgc[..self.sampling_columns_max_cgc.len().min(index)]
     }
 
     /// Returns the custody group count (CGC)

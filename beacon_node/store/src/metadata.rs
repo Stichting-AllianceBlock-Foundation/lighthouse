@@ -2,7 +2,7 @@ use crate::{DBColumn, Error, StoreItem};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
-use types::{typenum::U4096, CGCUpdates, Checkpoint, Hash256, Slot, VariableList};
+use types::{typenum::U4096, CGCUpdates, ChainSpec, Checkpoint, Hash256, Slot, VariableList};
 
 pub const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion(22);
 
@@ -252,10 +252,29 @@ impl StoreItem for DataColumnInfo {
 /// Database parameters relevant to data column sync.
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode, Serialize, Deserialize)]
 pub struct CustodyInfo {
-    /// Given a PeerID, compute the set of custody columns with the maximum CGC value, then sort
-    /// them numerically.
+    /// Given a PeerID, compute the custody groups for the maximum CGC value.
+    ///
     /// 4096 is a random max limit that will never be reached
-    pub ordered_custody_columns: VariableList<u64, U4096>,
+    custody_groups_max_cgc: VariableList<u64, U4096>,
+}
+
+impl CustodyInfo {
+    pub fn new(custody_groups_max_cgc: &[u64], spec: &ChainSpec) -> Result<Self, String> {
+        if custody_groups_max_cgc.len() != spec.number_of_custody_groups as usize {
+            return Err(format!(
+                "custody_groups_max_cgc {} len != number_of_custody_groups",
+                custody_groups_max_cgc.len()
+            ));
+        }
+        Ok(Self {
+            custody_groups_max_cgc: VariableList::new(custody_groups_max_cgc.to_vec())
+                .map_err(|e| format!("Max CGC > 4096: {e:?}"))?,
+        })
+    }
+
+    pub fn custody_groups_for_cgc(&self, cgc: u64) -> &[u64] {
+        &self.custody_groups_max_cgc[..self.custody_groups_max_cgc.len().min(cgc as usize)]
+    }
 }
 
 impl StoreItem for CustodyInfo {

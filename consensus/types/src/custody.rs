@@ -33,4 +33,8 @@ impl CGCUpdates {
             .push(update)
             .map_err(|e| format!("Updates list full: {e:?}"))
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Slot, u64)> + '_ {
+        std::iter::once((Slot::new(0), self.initial_value)).chain(self.updates.iter().copied())
+    }
 }

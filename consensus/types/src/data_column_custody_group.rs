@@ -104,6 +104,33 @@ pub fn compute_subnets_from_custody_group(
     Ok(result)
 }
 
+pub fn compute_subnets_from_custody_groups<'a>(
+    custody_groups: &'a [CustodyIndex],
+    spec: &'a ChainSpec,
+) -> impl Iterator<Item = DataColumnSubnetId> + 'a {
+    custody_groups
+        .iter()
+        .flat_map(|custody_group| {
+            compute_columns_for_custody_group(*custody_group, spec)
+                .expect("max(custody_groups) < number_of_custody_groups")
+                .map(|column_index| DataColumnSubnetId::from_column_index(column_index, spec))
+        })
+        .unique()
+}
+
+pub fn compute_columns_from_custody_groups<'a>(
+    custody_groups: &'a [CustodyIndex],
+    spec: &'a ChainSpec,
+) -> impl Iterator<Item = ColumnIndex> + 'a {
+    custody_groups
+        .iter()
+        .flat_map(|custody_group| {
+            compute_columns_for_custody_group(*custody_group, spec)
+                .expect("max(custody_groups) < number_of_custody_groups")
+        })
+        .unique()
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

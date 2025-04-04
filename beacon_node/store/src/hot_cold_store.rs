@@ -2466,7 +2466,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
     }
 
     /// Store the given `custody_info` to disk.
-    pub fn put_custody_info_in_batch(&self, custody_info: &CustodyInfo) -> Result<(), Error> {
+    pub fn put_custody_info(&self, custody_info: &CustodyInfo) -> Result<(), Error> {
         let kv_store_op = custody_info.as_kv_store_op(CUSTODY_INFO_KEY);
         self.hot_db.do_atomically(vec![kv_store_op])
     }

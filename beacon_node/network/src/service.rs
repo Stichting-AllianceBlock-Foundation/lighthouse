@@ -26,6 +26,7 @@ use lighthouse_network::{
 use logging::crit;
 use std::collections::BTreeSet;
 use std::{collections::HashSet, pin::Pin, sync::Arc, time::Duration};
+use store::metadata::CustodyInfo;
 use store::HotColdDB;
 use strum::IntoStaticStr;
 use task_executor::ShutdownReason;
@@ -238,6 +239,7 @@ impl<T: BeaconChainTypes> NetworkService<T> {
 
         // get a reference to the beacon chain store
         let store = beacon_chain.store.clone();
+        let spec = beacon_chain.spec.clone();
 
         // build the current enr_fork_id for adding to our local ENR
         let enr_fork_id = beacon_chain.enr_fork_id();
@@ -247,15 +249,13 @@ impl<T: BeaconChainTypes> NetworkService<T> {
         let next_fork_subscriptions = Box::pin(next_fork_subscriptions_delay(&beacon_chain).into());
         let next_unsubscribe = Box::pin(None.into());
 
-        let current_slot = beacon_chain
-            .slot()
-            .unwrap_or(beacon_chain.spec.genesis_slot);
+        let current_slot = beacon_chain.slot().unwrap_or(spec.genesis_slot);
 
         // Create a fork context for the given config and genesis validators root
         let fork_context = Arc::new(ForkContext::new::<T::EthSpec>(
             current_slot,
             beacon_chain.genesis_validators_root,
-            &beacon_chain.spec,
+            &spec,
         ));
 
         debug!(fork_name = ?fork_context.current_fork(), "Current fork");
@@ -265,16 +265,9 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             config: config.clone(),
             enr_fork_id,
             fork_context: fork_context.clone(),
-            chain_spec: beacon_chain.spec.clone(),
+            chain_spec: spec.clone(),
             libp2p_registry,
         };
-
-        if let Some(_disk_custody_info) = store
-            .get_custody_info()
-            .map_err(|e| format!("Unable to read custody info from the DB: {e:?}"))?
-        {
-            // TODO(das): check that list of columns is compatible
-        }
 
         // If there are no stored disk_cgc_updates `Network::new` will default to empty ones with
         // the minimum CGC.
@@ -285,6 +278,58 @@ impl<T: BeaconChainTypes> NetworkService<T> {
         // launch libp2p service
         let (mut libp2p, network_globals) =
             Network::new(executor.clone(), service_context, initial_cgc_updates).await?;
+
+        // Assert compatibility of the previous DB against the new PeerID and CGC
+        if let Some(disk_custody_info) = store
+            .get_custody_info()
+            .map_err(|e| format!("Unable to read custody info from the DB: {e:?}"))?
+        {
+            // TODO(das): only consider the cgc steps within the DA window
+            for (slot, cgc) in network_globals.dump_cgc_updates().iter() {
+                let custody_groups_disk = disk_custody_info
+                    .custody_groups_for_cgc(cgc)
+                    .iter()
+                    .copied()
+                    .collect::<HashSet<_>>();
+                let custody_groups_now = network_globals
+                    .custody_groups_for_cgc(cgc)
+                    .iter()
+                    .copied()
+                    .collect::<HashSet<_>>();
+
+                if !custody_groups_disk.is_superset(&custody_groups_now) {
+                    let error_message = format!(
+                        "Incompatible database with current PeerID and config.
+                    At slots > {slot} this node has a CGC of {cgc}.
+                    Custody groups on disk {custody_groups_disk:?}
+                    !=
+                    Custody groups now {custody_groups_now:?}"
+                    );
+                    // Only hard error after PeerDAS activation
+                    if spec
+                        .fork_name_at_slot::<T::EthSpec>(beacon_chain.head().head_slot())
+                        .fulu_enabled()
+                    {
+                        return Err(error_message);
+                    } else {
+                        warn!(
+                            msg = error_message,
+                            "Incompatible PeerDAS database, after Fulu activation this will result in an error"
+                        );
+                    }
+                }
+            }
+        } else {
+            // Write CustodyInfo only if there's none written before
+            let custody_info_with_new_peerid = CustodyInfo::new(
+                network_globals.custody_groups_for_cgc(spec.number_of_custody_groups),
+                &spec,
+            )
+            .map_err(|e| format!("Invalid custody groups for max CGC: {e:?}"))?;
+            store
+                .put_custody_info(&custody_info_with_new_peerid)
+                .map_err(|e| format!("Unable to write custody info from the DB: {e:?}"))?;
+        }
 
         // Repopulate the DHT with stored ENR's if discovery is not disabled.
         if !config.disable_discovery {
@@ -336,7 +381,7 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             validator_subscription_recv,
         } = network_receivers;
 
-        let epoch_in_seconds = fork_context.spec.seconds_per_slot * T::EthSpec::slots_per_epoch();
+        let epoch_in_seconds = spec.seconds_per_slot * T::EthSpec::slots_per_epoch();
 
         // create the network service and spawn the task
         let network_service = NetworkService {
