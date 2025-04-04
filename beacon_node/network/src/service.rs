@@ -297,6 +297,11 @@ impl<T: BeaconChainTypes> NetworkService<T> {
                     .copied()
                     .collect::<HashSet<_>>();
 
+                // For each CGC value compares if the set of custody groups are compatible.
+                // For example: if this DB was synced for a supernode under PeerID A, there's a
+                // single CGC step of number_of_custody_groups and the set of custody groups = all
+                // the custody groups. If this node starts with a new PeerID B, the set of custody
+                // groups will still = all custody groups so both sets are compatible.
                 if !custody_groups_disk.is_superset(&custody_groups_now) {
                     let error_message = format!(
                         "Incompatible database with current PeerID and config.

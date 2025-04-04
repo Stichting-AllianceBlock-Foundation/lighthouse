@@ -80,7 +80,6 @@ impl<E: EthSpec> NetworkGlobals<E> {
 
     /// Returns the local ENR from the underlying Discv5 behaviour that external peers may connect
     /// to.
-    /// TODO: This contains duplicate metadata. Test who is consuming this method
     pub fn local_enr(&self) -> Enr {
         self.local_enr.read().enr().clone()
     }
@@ -95,8 +94,8 @@ impl<E: EthSpec> NetworkGlobals<E> {
         *self.peer_id.read()
     }
 
-    // TODO: Must keep consistency between the persisted `local_enr` and the return of this
-    // function. Otherwise peers may downscore us and the network will have issues.
+    // Returns MetaData based on the cached local ENR fields. Local ENR from discv5 is the source of
+    // truth for the announced CGC value and the attnets and syncnets bitfields.
     pub fn local_metadata(&self) -> MetaData<E> {
         self.local_enr.read().metadata().clone()
     }
