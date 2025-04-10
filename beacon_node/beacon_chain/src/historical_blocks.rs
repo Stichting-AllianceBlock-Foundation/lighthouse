@@ -36,6 +36,8 @@ pub enum HistoricalBlockError {
     IndexOutOfBounds,
     /// Internal store error
     StoreError(StoreError),
+    /// Internal error
+    InternalError(String),
 }
 
 impl From<StoreError> for HistoricalBlockError {
@@ -45,6 +47,37 @@ impl From<StoreError> for HistoricalBlockError {
 }
 
 impl<T: BeaconChainTypes> BeaconChain<T> {
+    pub fn reset_anchor_oldest_block(
+        &self,
+        new_oldest_block_slot: Slot,
+    ) -> Result<(), HistoricalBlockError> {
+        let prev_anchor = self.store.get_anchor_info();
+
+        if new_oldest_block_slot > prev_anchor.oldest_block_slot {
+            let new_oldest_parent_root = self
+                .block_root_at_slot(new_oldest_block_slot, crate::WhenSlotSkipped::Prev)
+                .map_err(|e| {
+                    HistoricalBlockError::InternalError(format!(
+                        "Error reading block root at slot: {e:?}"
+                    ))
+                })?
+                // The block at `new_oldest_block_slot` must already be imported since it's gte
+                // current `oldest_block_slot`.
+                .ok_or(HistoricalBlockError::InternalError(format!(
+                    "Missing historical block root at slot {new_oldest_block_slot}"
+                )))?;
+            let new_anchor = prev_anchor
+                .as_increased_oldest_block(new_oldest_block_slot, new_oldest_parent_root);
+            self.store
+                .compare_and_set_anchor_info_with_write(prev_anchor, new_anchor)?;
+            debug!(%new_oldest_block_slot, ?new_oldest_parent_root, "Mutated anchor info to advance oldest block");
+        } else {
+            // This batch can be imported, no need to update anchor
+        }
+
+        Ok(())
+    }
+
     /// Store a batch of historical blocks in the database.
     ///
     /// The `blocks` should be given in slot-ascending order. One of the blocks should have a block

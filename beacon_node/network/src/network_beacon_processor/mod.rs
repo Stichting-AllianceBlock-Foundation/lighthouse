@@ -592,6 +592,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         self: &Arc<Self>,
         process_id: ChainSegmentProcessId,
         blocks: Vec<RpcBlock<T::EthSpec>>,
+        reset_anchor_new_oldest_block_slot: Option<Slot>,
     ) -> Result<(), Error<T::EthSpec>> {
         let is_backfill = matches!(&process_id, ChainSegmentProcessId::BackSyncBatchId { .. });
         debug!(blocks = blocks.len(), id = ?process_id, "Batch sending for process");
@@ -609,7 +610,12 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 NotifyExecutionLayer::Yes
             };
             processor
-                .process_chain_segment(process_id, blocks, notify_execution_layer)
+                .process_chain_segment(
+                    process_id,
+                    blocks,
+                    notify_execution_layer,
+                    reset_anchor_new_oldest_block_slot,
+                )
                 .await;
         };
         let process_fn = Box::pin(process_fn);

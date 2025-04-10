@@ -71,7 +71,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, info_span, trace, warn, Instrument};
 use types::{
-    BlobSidecar, DataColumnSidecar, EthSpec, ForkContext, Hash256, SignedBeaconBlock, Slot,
+    BlobSidecar, DataColumnSidecar, Epoch, EthSpec, ForkContext, Hash256, SignedBeaconBlock, Slot,
 };
 
 #[cfg(test)]
@@ -178,8 +178,9 @@ pub enum SyncMessage<E: EthSpec> {
     /// A block from gossip has completed processing,
     GossipBlockProcessResult { block_root: Hash256, imported: bool },
 
-    /// Network service asks backfill sync to restart after increasing the oldest_block_slot
-    BackfillSyncRestart(Slot),
+    /// Network service asks backfill sync to restart after increasing the oldest_block_slot. Must
+    /// start fetching batches from `epoch`.
+    BackfillSyncRestart(Epoch),
 }
 
 /// The type of processing specified for a received block.
@@ -899,11 +900,11 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                     self.on_sampling_result(requester, result)
                 }
             }
-            SyncMessage::BackfillSyncRestart(slot) => {
-                if let Err(e) = self.backfill_sync.restart(&mut self.network) {
+            SyncMessage::BackfillSyncRestart(start_epoch) => {
+                if let Err(e) = self.backfill_sync.restart(&mut self.network, start_epoch) {
                     error!(error = ?e, "Error on backfill sync restart");
                 } else {
-                    debug!(%slot, "Received backfill sync restart event");
+                    debug!(%start_epoch, "Received backfill sync restart event");
                 }
             }
         }

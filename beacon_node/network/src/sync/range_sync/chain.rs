@@ -333,7 +333,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         let process_id = ChainSegmentProcessId::RangeBatchId(self.id, batch_id);
         self.current_processing_batch = Some(batch_id);
 
-        if let Err(e) = beacon_processor.send_chain_segment(process_id, blocks) {
+        if let Err(e) = beacon_processor.send_chain_segment(process_id, blocks, None) {
             crit!(msg = "process_batch",error = %e, batch = ?self.processing_target, "Failed to send chain segment to processor.");
             // This is unlikely to happen but it would stall syncing since the batch now has no
             // blocks to continue, and the chain is expecting a processing result that won't

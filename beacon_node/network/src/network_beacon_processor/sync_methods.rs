@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use types::beacon_block_body::format_kzg_commitments;
 use types::blob_sidecar::FixedBlobSidecarList;
-use types::{BlockImportSource, DataColumnSidecar, DataColumnSidecarList, Epoch, Hash256};
+use types::{BlockImportSource, DataColumnSidecar, DataColumnSidecarList, Epoch, Hash256, Slot};
 
 /// Id associated to a batch processing request, either a sync batch or a parent lookup.
 #[derive(Clone, Debug, PartialEq)]
@@ -438,6 +438,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         sync_type: ChainSegmentProcessId,
         downloaded_blocks: Vec<RpcBlock<T::EthSpec>>,
         notify_execution_layer: NotifyExecutionLayer,
+        reset_anchor_new_oldest_block_slot: Option<Slot>,
     ) {
         let result = match sync_type {
             // this a request from the range sync
@@ -498,7 +499,9 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     .map(|wrapped| wrapped.n_data_columns())
                     .sum::<usize>();
 
-                match self.process_backfill_blocks(downloaded_blocks) {
+                match self
+                    .process_backfill_blocks(downloaded_blocks, reset_anchor_new_oldest_block_slot)
+                {
                     (imported_blocks, Ok(_)) => {
                         debug!(
                             batch_epoch = %epoch,
@@ -586,6 +589,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
     fn process_backfill_blocks(
         &self,
         downloaded_blocks: Vec<RpcBlock<T::EthSpec>>,
+        reset_anchor_new_oldest_block_slot: Option<Slot>,
     ) -> (usize, Result<(), ChainSegmentFailed>) {
         let total_blocks = downloaded_blocks.len();
         let available_blocks = match self
@@ -634,6 +638,23 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     ),
                 }),
             );
+        }
+
+        // TODO(das): If `reset_anchor_new_oldest_block_slot` does not get set for some reason,
+        // backfill sync will continue as usual but importing blocks from the previous start,
+        // leaving a CGC gap in the DB. I would like to have stronger assurances that this is
+        // working as expected. The issue is the `blocks_to_import` filtered vec in
+        // `import_historical_block_batch`.
+        if let Some(new_oldest_block_slot) = reset_anchor_new_oldest_block_slot {
+            if let Err(e) = self.chain.reset_anchor_oldest_block(new_oldest_block_slot) {
+                return (
+                    0,
+                    Err(ChainSegmentFailed {
+                        peer_action: None,
+                        message: format!("Failed to reset anchor oldest block: {e:?}"),
+                    }),
+                );
+            }
         }
 
         match self.chain.import_historical_block_batch(available_blocks) {
@@ -688,6 +709,11 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     }
                     HistoricalBlockError::StoreError(e) => {
                         warn!(error = ?e, "Backfill batch processing error");
+                        // This is an internal error, don't penalize the peer.
+                        None
+                    }
+                    HistoricalBlockError::InternalError(e) => {
+                        warn!(error = e, "Backfill batch processing error");
                         // This is an internal error, don't penalize the peer.
                         None
                     } //

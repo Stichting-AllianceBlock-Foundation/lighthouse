@@ -108,6 +108,10 @@ pub struct BackFillSync<T: BeaconChainTypes> {
     /// This only gets refreshed from the beacon chain if we enter a failed state.
     current_start: BatchId,
 
+    /// If Some it will reset the anchor oldest block pointer to this epoch. Used in PeerDAS to
+    /// restart backfill over a segment of blocks already imported.
+    restart_epoch: Option<Epoch>,
+
     /// Starting epoch of the batch that needs to be processed next.
     /// This is incremented as the chain advances.
     processing_target: BatchId,
@@ -179,6 +183,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
             active_requests: HashMap::new(),
             processing_target: current_start,
             current_start,
+            restart_epoch: None,
             last_batch_downloaded: false,
             to_be_downloaded: current_start,
             network_globals,
@@ -219,7 +224,13 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
     pub fn restart(
         &mut self,
         network: &mut SyncNetworkContext<T>,
+        new_start: Epoch,
     ) -> Result<SyncStart, BackFillError> {
+        self.current_start = new_start;
+        self.processing_target = new_start;
+        self.to_be_downloaded = new_start;
+        self.restart_epoch = Some(new_start);
+
         match self.state() {
             // Reset and start again
             BackFillState::Syncing => {
@@ -593,10 +604,23 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         let process_id = ChainSegmentProcessId::BackSyncBatchId(batch_id);
         self.current_processing_batch = Some(batch_id);
 
-        if let Err(e) = network
-            .beacon_processor()
-            .send_chain_segment(process_id, blocks)
-        {
+        // TODO(das): This mechanism can fail silently. But at the same time we don't want to keep
+        // re-writing the anchor everytime. It must happen once.
+        let reset_anchor_new_oldest_block_slot = if let Some(restart_epoch) = self.restart_epoch {
+            if restart_epoch == batch_id {
+                Some(restart_epoch.start_slot(T::EthSpec::slots_per_epoch()))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Err(e) = network.beacon_processor().send_chain_segment(
+            process_id,
+            blocks,
+            reset_anchor_new_oldest_block_slot,
+        ) {
             crit!(
                 msg = "process_batch",
                 error = %e,

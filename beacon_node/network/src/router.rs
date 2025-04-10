@@ -28,7 +28,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info_span, trace, warn, Instrument};
-use types::{BlobSidecar, DataColumnSidecar, EthSpec, ForkContext, SignedBeaconBlock, Slot};
+use types::{BlobSidecar, DataColumnSidecar, Epoch, EthSpec, ForkContext, SignedBeaconBlock};
 
 /// Handles messages from the network and routes them to the appropriate service to be handled.
 pub struct Router<T: BeaconChainTypes> {
@@ -76,7 +76,7 @@ pub enum RouterMessage<E: EthSpec> {
     /// The peer manager has requested we re-status a peer.
     StatusPeer(PeerId),
     /// Trigger backfill sync restart
-    BackfillSyncRestart(Slot),
+    BackfillSyncRestart(Epoch),
 }
 
 impl<T: BeaconChainTypes> Router<T> {
@@ -183,8 +183,8 @@ impl<T: BeaconChainTypes> Router<T> {
             RouterMessage::PubsubMessage(id, peer_id, gossip, should_process) => {
                 self.handle_gossip(id, peer_id, gossip, should_process);
             }
-            RouterMessage::BackfillSyncRestart(slot) => {
-                self.send_to_sync(SyncMessage::BackfillSyncRestart(slot));
+            RouterMessage::BackfillSyncRestart(epoch) => {
+                self.send_to_sync(SyncMessage::BackfillSyncRestart(epoch));
             }
         }
     }

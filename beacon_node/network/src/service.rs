@@ -1098,7 +1098,9 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             // `finalized_slot`.
             self.network_globals
                 .prune_cgc_updates_older_than(finalized_slot);
-            self.send_to_router(RouterMessage::BackfillSyncRestart(finalized_slot));
+            self.send_to_router(RouterMessage::BackfillSyncRestart(
+                finalized_slot.epoch(T::EthSpec::slots_per_epoch()),
+            ));
 
             info!(slot = %finalized_slot, "Restarting backfill sync to fetch custody columns");
             metrics::inc_counter(&metrics::BACKFILL_RESTARTED_FOR_CGC);
