@@ -1173,7 +1173,7 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                             &duty,
                             &duties_service.validator_store,
                             &duties_service.spec,
-                            !config.selections_endpoint, // non-distributed case
+                            config.selections_endpoint, // non-distributed case
                             &duties_service.beacon_nodes,
                         )
                         .await?;
