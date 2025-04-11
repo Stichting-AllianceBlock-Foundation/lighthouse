@@ -127,7 +127,8 @@ pub struct SubscriptionSlots {
 }
 
 struct SelectionProofConfig {
-    look_ahead: u64,
+    lookahead_slot: u64,
+    computation_offset: Duration, // The seconds to compute the selection proof before a slot
     selections_endpoint: bool,
     parallel_sign: bool,
 }
@@ -990,11 +991,13 @@ async fn poll_beacon_attesters_for_epoch<T: SlotClock + 'static, E: EthSpec>(
     let subservice = duties_service.clone();
 
     let config = SelectionProofConfig {
-        look_ahead: if duties_service.distributed {
+        lookahead_slot: if duties_service.distributed {
             SELECTION_PROOF_SLOT_LOOKAHEAD_DVT
         } else {
             SELECTION_PROOF_SLOT_LOOKAHEAD
         },
+        computation_offset: duties_service.slot_clock.slot_duration()
+            / SELECTION_PROOF_SCHEDULE_DENOM,
         selections_endpoint: duties_service.distributed,
         parallel_sign: duties_service.distributed,
     };
@@ -1108,17 +1111,16 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
     // At halfway through each slot when nothing else is likely to be getting signed, sign a batch
     // of selection proofs and insert them into the duties service `attesters` map.
     let slot_clock = &duties_service.slot_clock;
-    let slot_offset = duties_service.slot_clock.slot_duration() / SELECTION_PROOF_SCHEDULE_DENOM;
 
     while !duties_by_slot.is_empty() {
         if let Some(duration) = slot_clock.duration_to_next_slot() {
-            sleep(duration.saturating_sub(slot_offset)).await;
+            sleep(duration.saturating_sub(config.computation_offset)).await;
 
             let Some(current_slot) = slot_clock.now() else {
                 continue;
             };
 
-            let selection_lookahead = config.look_ahead;
+            let selection_lookahead = config.lookahead_slot;
 
             let lookahead_slot = current_slot + selection_lookahead;
 
