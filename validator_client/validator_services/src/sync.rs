@@ -561,7 +561,7 @@ pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
             "slot" = %proof_slot,
             "subcommittee_index" = *subnet_id,
             "partial selection proof" = ?Signature::from(selection_proof.clone()),
-            "Created sync selection proof"
+            "Sending sync selection to middleware"
         );
 
         let sync_committee_selection = SyncCommitteeSelection {
@@ -588,7 +588,6 @@ pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
 
         match middleware_response {
             Ok(response) => {
-                // Process each middleware response
                 let response_data = &response.data[0];
                 // The selection proof from middleware response will be a full selection proof
                 debug!(
@@ -664,14 +663,14 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                         )
                         .await;
 
-                        result.map(|proof| (duty.validator_index, proof_slot, subnet_id, proof))
+                        result.map(|proof| (duty.validator_index, slot, subnet_id, proof))
                     });
                 }
             }
 
-            let mut successful_results = Vec::new();
+            // let mut successful_results = Vec::new();
             while let Some(result) = futures_unordered.next().await {
-                if let Some((validator_index, proof_slot, subnet_id, proof)) = result {
+                if let Some((validator_index, slot, subnet_id, proof)) = result {
                     let sync_map = duties_service.sync_duties.committees.read();
                     let Some(committee_duties) = sync_map.get(&sync_committee_period) else {
                         debug!("period" = sync_committee_period, "Missing sync duties");
@@ -686,7 +685,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                             if let Some(Some(duty)) = validators.get(&validator_index) {
                                 debug!(
                                     validator_index,
-                                    "slot" = %proof_slot,
+                                    "slot" = %slot,
                                     "subcommittee_index" = *subnet_id,
                                     // log full selection proof for debugging
                                     "full selection proof" = ?proof,
@@ -698,7 +697,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                     .proofs
                                     .write()
                                     .insert((slot, subnet_id), proof);
-                                successful_results.push(validator_index);
+                                //successful_results.push(validator_index);
                             }
                         }
                         Ok(false) => {} // Not an aggregator
