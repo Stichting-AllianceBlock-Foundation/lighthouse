@@ -4,7 +4,6 @@ use crate::beacon_chain::ForkChoiceError;
 use crate::beacon_fork_choice_store::Error as ForkChoiceStoreError;
 use crate::data_availability_checker::AvailabilityCheckError;
 use crate::eth1_chain::Error as Eth1ChainError;
-use crate::historical_blocks::HistoricalBlockError;
 use crate::migrate::PruningError;
 use crate::naive_aggregation_pool::Error as NaiveAggregationError;
 use crate::observed_aggregates::Error as ObservedAttestationsError;
@@ -62,6 +61,7 @@ pub enum BeaconChainError {
     ForkChoiceStoreError(ForkChoiceStoreError),
     MissingBeaconBlock(Hash256),
     MissingBeaconState(Hash256),
+    MissingHotStateSummary(Hash256),
     SlotProcessingError(SlotProcessingError),
     EpochProcessingError(EpochProcessingError),
     StateAdvanceError(StateAdvanceError),
@@ -123,7 +123,11 @@ pub enum BeaconChainError {
         block_slot: Slot,
         state_slot: Slot,
     },
-    HistoricalBlockError(HistoricalBlockError),
+    /// Block is not available (only returned when fetching historic blocks).
+    HistoricalBlockOutOfRange {
+        slot: Slot,
+        oldest_block_slot: Slot,
+    },
     InvalidStateForShuffling {
         state_epoch: Epoch,
         shuffling_epoch: Epoch,
@@ -178,9 +182,9 @@ pub enum BeaconChainError {
         execution_block_hash: Option<ExecutionBlockHash>,
     },
     ForkchoiceUpdate(execution_layer::Error),
-    FinalizedCheckpointMismatch {
-        head_state: Checkpoint,
-        fork_choice: Hash256,
+    InvalidCheckpoint {
+        state_root: Hash256,
+        checkpoint: Checkpoint,
     },
     InvalidSlot(Slot),
     HeadBlockNotFullyVerified {
@@ -223,6 +227,10 @@ pub enum BeaconChainError {
     EmptyRpcCustodyColumns,
     AttestationError(AttestationError),
     AttestationCommitteeIndexNotSet,
+    InsufficientColumnsToReconstructBlobs {
+        columns_found: usize,
+    },
+    FailedToReconstructBlobs(String),
 }
 
 easy_from_to!(SlotProcessingError, BeaconChainError);
@@ -245,7 +253,6 @@ easy_from_to!(BlockSignatureVerifierError, BeaconChainError);
 easy_from_to!(PruningError, BeaconChainError);
 easy_from_to!(ArithError, BeaconChainError);
 easy_from_to!(ForkChoiceStoreError, BeaconChainError);
-easy_from_to!(HistoricalBlockError, BeaconChainError);
 easy_from_to!(StateAdvanceError, BeaconChainError);
 easy_from_to!(BlockReplayError, BeaconChainError);
 easy_from_to!(InconsistentFork, BeaconChainError);

@@ -86,7 +86,7 @@ pub async fn cli_run(matches: &ArgMatches, dump_config: DumpConfig) -> Result<()
     }
 }
 
-async fn run<'a>(config: DeleteConfig) -> Result<(), String> {
+async fn run(config: DeleteConfig) -> Result<(), String> {
     let DeleteConfig {
         vc_url,
         vc_token_path,
@@ -148,7 +148,7 @@ mod test {
     use crate::{
         common::ValidatorSpecification, import_validators::tests::TestBuilder as ImportTestBuilder,
     };
-    use validator_client::http_api::{test_utils::ApiTester, Config as HttpConfig};
+    use validator_http_api::{test_utils::ApiTester, Config as HttpConfig};
 
     struct TestBuilder {
         delete_config: Option<DeleteConfig>,

@@ -58,7 +58,7 @@ pub async fn cli_run(matches: &ArgMatches, dump_config: DumpConfig) -> Result<()
     }
 }
 
-async fn run<'a>(config: ListConfig) -> Result<Vec<SingleKeystoreResponse>, String> {
+async fn run(config: ListConfig) -> Result<Vec<SingleKeystoreResponse>, String> {
     let ListConfig {
         vc_url,
         vc_token_path,
@@ -87,7 +87,7 @@ mod test {
     use crate::{
         common::ValidatorSpecification, import_validators::tests::TestBuilder as ImportTestBuilder,
     };
-    use validator_client::http_api::{test_utils::ApiTester, Config as HttpConfig};
+    use validator_http_api::{test_utils::ApiTester, Config as HttpConfig};
 
     struct TestBuilder {
         list_config: Option<ListConfig>,

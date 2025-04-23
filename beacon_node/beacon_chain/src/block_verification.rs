@@ -5,7 +5,7 @@
 //! - Verification for gossip blocks (i.e., should we gossip some block from the network).
 //! - Verification for normal blocks (e.g., some block received on the RPC during a parent lookup).
 //! - Verification for chain segments (e.g., some chain of blocks received on the RPC during a
-//!    sync).
+//!   sync).
 //!
 //! The primary source of complexity here is that we wish to avoid doing duplicate work as a block
 //! moves through the verification process. For example, if some block is verified for gossip, we
@@ -74,7 +74,6 @@ use metrics::TryExt;
 use parking_lot::RwLockReadGuard;
 use proto_array::Block as ProtoBlock;
 use safe_arith::ArithError;
-use slog::{debug, error, Logger};
 use slot_clock::SlotClock;
 use ssz::Encode;
 use ssz_derive::{Decode, Encode};
@@ -92,12 +91,14 @@ use std::fs;
 use std::io::Write;
 use std::sync::Arc;
 use store::{Error as DBError, HotStateSummary, KeyValueStore, StoreOp};
+use strum::AsRefStr;
 use task_executor::JoinHandle;
+use tracing::{debug, error};
 use types::{
     data_column_sidecar::DataColumnSidecarError, BeaconBlockRef, BeaconState, BeaconStateError,
     BlobsList, ChainSpec, DataColumnSidecarList, Epoch, EthSpec, ExecutionBlockHash, FullPayload,
-    Hash256, InconsistentFork, PublicKey, PublicKeyBytes, RelativeEpoch, SignedBeaconBlock,
-    SignedBeaconBlockHeader, Slot,
+    Hash256, InconsistentFork, KzgProofs, PublicKey, PublicKeyBytes, RelativeEpoch,
+    SignedBeaconBlock, SignedBeaconBlockHeader, Slot,
 };
 
 pub const POS_PANDA_BANNER: &str = r#"
@@ -137,7 +138,7 @@ const WRITE_BLOCK_PROCESSING_SSZ: bool = cfg!(feature = "write_ssz_files");
 ///
 /// - The block is malformed/invalid (indicated by all results other than `BeaconChainError`.
 /// - We encountered an error whilst trying to verify the block (a `BeaconChainError`).
-#[derive(Debug)]
+#[derive(Debug, AsRefStr)]
 pub enum BlockError {
     /// The parent block was unknown.
     ///
@@ -207,24 +208,18 @@ pub enum BlockError {
     ///
     /// The block is invalid and the peer is faulty.
     IncorrectBlockProposer { block: u64, local_shuffling: u64 },
-    /// The proposal signature in invalid.
-    ///
-    /// ## Peer scoring
-    ///
-    /// The block is invalid and the peer is faulty.
-    ProposalSignatureInvalid,
     /// The `block.proposal_index` is not known.
     ///
     /// ## Peer scoring
     ///
     /// The block is invalid and the peer is faulty.
     UnknownValidator(u64),
-    /// A signature in the block is invalid (exactly which is unknown).
+    /// A signature in the block is invalid
     ///
     /// ## Peer scoring
     ///
     /// The block is invalid and the peer is faulty.
-    InvalidSignature,
+    InvalidSignature(InvalidSignature),
     /// The provided block is not from a later slot than its parent.
     ///
     /// ## Peer scoring
@@ -287,6 +282,9 @@ pub enum BlockError {
     /// problems to worry about than losing peers, and we're doing the network a favour by
     /// disconnecting.
     ParentExecutionPayloadInvalid { parent_root: Hash256 },
+    /// This is a known invalid block that was listed in Lighthouses configuration.
+    /// At the moment this error is only relevant as part of the Holesky network recovery efforts.
+    KnownInvalidExecutionPayload(Hash256),
     /// The block is a slashable equivocation from the proposer.
     ///
     /// ## Peer scoring
@@ -326,6 +324,17 @@ pub enum BlockError {
     /// We were unable to process this block due to an internal error. It's unclear if the block is
     /// valid.
     InternalError(String),
+}
+
+/// Which specific signature(s) are invalid in a SignedBeaconBlock
+#[derive(Debug)]
+pub enum InvalidSignature {
+    // The outer signature in a SignedBeaconBlock
+    ProposerSignature,
+    // One or more signatures in BeaconBlockBody
+    BlockBodySignatures,
+    // One or more signatures in SignedBeaconBlock
+    Unknown,
 }
 
 impl From<AvailabilityCheckError> for BlockError {
@@ -522,7 +531,9 @@ pub enum BlockSlashInfo<TErr> {
 impl BlockSlashInfo<BlockError> {
     pub fn from_early_error_block(header: SignedBeaconBlockHeader, e: BlockError) -> Self {
         match e {
-            BlockError::ProposalSignatureInvalid => BlockSlashInfo::SignatureInvalid(e),
+            BlockError::InvalidSignature(InvalidSignature::ProposerSignature) => {
+                BlockSlashInfo::SignatureInvalid(e)
+            }
             // `InvalidSignature` could indicate any signature in the block, so we want
             // to recheck the proposer signature alone.
             _ => BlockSlashInfo::SignatureNotChecked(header, e),
@@ -651,7 +662,7 @@ pub fn signature_verify_chain_segment<T: BeaconChainTypes>(
     }
 
     if signature_verifier.verify().is_err() {
-        return Err(BlockError::InvalidSignature);
+        return Err(BlockError::InvalidSignature(InvalidSignature::Unknown));
     }
 
     drop(pubkey_cache);
@@ -672,6 +683,7 @@ pub struct GossipVerifiedBlock<T: BeaconChainTypes> {
     pub block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
     consensus_context: ConsensusContext<T::EthSpec>,
+    custody_columns_count: usize,
 }
 
 /// A wrapper around a `SignedBeaconBlock` that indicates that all signatures (except the deposit
@@ -683,7 +695,7 @@ pub struct SignatureVerifiedBlock<T: BeaconChainTypes> {
     consensus_context: ConsensusContext<T::EthSpec>,
 }
 
-/// Used to await the result of executing payload with a remote EE.
+/// Used to await the result of executing payload with an EE.
 type PayloadVerificationHandle = JoinHandle<Option<Result<PayloadVerificationOutcome, BlockError>>>;
 
 /// A wrapper around a `SignedBeaconBlock` that indicates that this block is fully verified and
@@ -707,6 +719,7 @@ pub trait IntoGossipVerifiedBlock<T: BeaconChainTypes>: Sized {
     fn into_gossip_verified_block(
         self,
         chain: &BeaconChain<T>,
+        custody_columns_count: usize,
     ) -> Result<GossipVerifiedBlock<T>, BlockError>;
     fn inner_block(&self) -> Arc<SignedBeaconBlock<T::EthSpec>>;
 }
@@ -715,6 +728,7 @@ impl<T: BeaconChainTypes> IntoGossipVerifiedBlock<T> for GossipVerifiedBlock<T> 
     fn into_gossip_verified_block(
         self,
         _chain: &BeaconChain<T>,
+        _custody_columns_count: usize,
     ) -> Result<GossipVerifiedBlock<T>, BlockError> {
         Ok(self)
     }
@@ -727,8 +741,9 @@ impl<T: BeaconChainTypes> IntoGossipVerifiedBlock<T> for Arc<SignedBeaconBlock<T
     fn into_gossip_verified_block(
         self,
         chain: &BeaconChain<T>,
+        custody_columns_count: usize,
     ) -> Result<GossipVerifiedBlock<T>, BlockError> {
-        GossipVerifiedBlock::new(self, chain)
+        GossipVerifiedBlock::new(self, chain, custody_columns_count)
     }
 
     fn inner_block(&self) -> Arc<SignedBeaconBlock<T::EthSpec>> {
@@ -740,6 +755,7 @@ pub fn build_blob_data_column_sidecars<T: BeaconChainTypes>(
     chain: &BeaconChain<T>,
     block: &SignedBeaconBlock<T::EthSpec, FullPayload<T::EthSpec>>,
     blobs: BlobsList<T::EthSpec>,
+    kzg_cell_proofs: KzgProofs<T::EthSpec>,
 ) -> Result<DataColumnSidecarList<T::EthSpec>, DataColumnSidecarError> {
     // Only attempt to build data columns if blobs is non empty to avoid skewing the metrics.
     if blobs.is_empty() {
@@ -750,8 +766,15 @@ pub fn build_blob_data_column_sidecars<T: BeaconChainTypes>(
         &metrics::DATA_COLUMN_SIDECAR_COMPUTATION,
         &[&blobs.len().to_string()],
     );
-    let sidecars = blobs_to_data_column_sidecars(&blobs, block, &chain.kzg, &chain.spec)
-        .discard_timer_on_break(&mut timer)?;
+    let blob_refs = blobs.iter().collect::<Vec<_>>();
+    let sidecars = blobs_to_data_column_sidecars(
+        &blob_refs,
+        kzg_cell_proofs.to_vec(),
+        block,
+        &chain.kzg,
+        &chain.spec,
+    )
+    .discard_timer_on_break(&mut timer)?;
     drop(timer);
     Ok(sidecars)
 }
@@ -796,6 +819,7 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
     pub fn new(
         block: Arc<SignedBeaconBlock<T::EthSpec>>,
         chain: &BeaconChain<T>,
+        custody_columns_count: usize,
     ) -> Result<Self, BlockError> {
         // If the block is valid for gossip we don't supply it to the slasher here because
         // we assume it will be transformed into a fully verified block. We *do* need to supply
@@ -805,12 +829,14 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
         // The `SignedBeaconBlock` and `SignedBeaconBlockHeader` have the same canonical root,
         // but it's way quicker to calculate root of the header since the hash of the tree rooted
         // at `BeaconBlockBody` is already computed in the header.
-        Self::new_without_slasher_checks(block, &header, chain).map_err(|e| {
-            process_block_slash_info::<_, BlockError>(
-                chain,
-                BlockSlashInfo::from_early_error_block(header, e),
-            )
-        })
+        Self::new_without_slasher_checks(block, &header, chain, custody_columns_count).map_err(
+            |e| {
+                process_block_slash_info::<_, BlockError>(
+                    chain,
+                    BlockSlashInfo::from_early_error_block(header, e),
+                )
+            },
+        )
     }
 
     /// As for new, but doesn't pass the block to the slasher.
@@ -818,6 +844,7 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
         block: Arc<SignedBeaconBlock<T::EthSpec>>,
         block_header: &SignedBeaconBlockHeader,
         chain: &BeaconChain<T>,
+        custody_columns_count: usize,
     ) -> Result<Self, BlockError> {
         // Ensure the block is the correct structure for the fork at `block.slot()`.
         block
@@ -838,9 +865,6 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
 
         let block_root = get_block_header_root(block_header);
 
-        // Disallow blocks that conflict with the anchor (weak subjectivity checkpoint), if any.
-        check_block_against_anchor_slot(block.message(), chain)?;
-
         // Do not gossip a block from a finalized slot.
         check_block_against_finalized_slot(block.message(), block_root, chain)?;
 
@@ -855,6 +879,9 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
         if fork_choice_read_lock.contains_block(&block_root) {
             return Err(BlockError::DuplicateFullyImported(block_root));
         }
+
+        // Do not process a block that is known to be invalid.
+        chain.check_invalid_block_roots(block_root)?;
 
         // Do not process a block that doesn't descend from the finalized root.
         //
@@ -918,12 +945,11 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
             let (mut parent, block) = load_parent(block, chain)?;
 
             debug!(
-                chain.log,
-                "Proposer shuffling cache miss";
-                "parent_root" => ?parent.beacon_block_root,
-                "parent_slot" => parent.beacon_block.slot(),
-                "block_root" => ?block_root,
-                "block_slot" => block.slot(),
+                parent_root = ?parent.beacon_block_root,
+                parent_slot = %parent.beacon_block.slot(),
+                ?block_root,
+                block_slot = %block.slot(),
+                "Proposer shuffling cache miss"
             );
 
             // The state produced is only valid for determining proposer/attester shuffling indices.
@@ -965,7 +991,9 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
         };
 
         if !signature_is_valid {
-            return Err(BlockError::ProposalSignatureInvalid);
+            return Err(BlockError::InvalidSignature(
+                InvalidSignature::ProposerSignature,
+            ));
         }
 
         chain
@@ -1023,6 +1051,7 @@ impl<T: BeaconChainTypes> GossipVerifiedBlock<T> {
             block_root,
             parent,
             consensus_context,
+            custody_columns_count,
         })
     }
 
@@ -1073,8 +1102,8 @@ impl<T: BeaconChainTypes> SignatureVerifiedBlock<T> {
             .fork_name(&chain.spec)
             .map_err(BlockError::InconsistentFork)?;
 
-        // Check the anchor slot before loading the parent, to avoid spurious lookups.
-        check_block_against_anchor_slot(block.message(), chain)?;
+        // Check whether the block is a banned block prior to loading the parent.
+        chain.check_invalid_block_roots(block_root)?;
 
         let (mut parent, block) = load_parent(block, chain)?;
 
@@ -1102,7 +1131,26 @@ impl<T: BeaconChainTypes> SignatureVerifiedBlock<T> {
                 parent: Some(parent),
             })
         } else {
-            Err(BlockError::InvalidSignature)
+            // Re-verify the proposer signature in isolation to attribute fault
+            let pubkey = pubkey_cache
+                .get(block.message().proposer_index() as usize)
+                .ok_or_else(|| BlockError::UnknownValidator(block.message().proposer_index()))?;
+            if block.as_block().verify_signature(
+                Some(block_root),
+                pubkey,
+                &state.fork(),
+                chain.genesis_validators_root,
+                &chain.spec,
+            ) {
+                // Proposer signature is valid, the invalid signature must be in the body
+                Err(BlockError::InvalidSignature(
+                    InvalidSignature::BlockBodySignatures,
+                ))
+            } else {
+                Err(BlockError::InvalidSignature(
+                    InvalidSignature::ProposerSignature,
+                ))
+            }
         }
     }
 
@@ -1151,13 +1199,16 @@ impl<T: BeaconChainTypes> SignatureVerifiedBlock<T> {
                 block: MaybeAvailableBlock::AvailabilityPending {
                     block_root: from.block_root,
                     block,
+                    custody_columns_count: from.custody_columns_count,
                 },
                 block_root: from.block_root,
                 parent: Some(parent),
                 consensus_context,
             })
         } else {
-            Err(BlockError::InvalidSignature)
+            Err(BlockError::InvalidSignature(
+                InvalidSignature::BlockBodySignatures,
+            ))
         }
     }
 
@@ -1213,40 +1264,6 @@ impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T> for SignatureVerifiedBloc
 
     fn block_cloned(&self) -> Arc<SignedBeaconBlock<T::EthSpec>> {
         self.block.block_cloned()
-    }
-}
-
-impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T> for Arc<SignedBeaconBlock<T::EthSpec>> {
-    /// Verifies the `SignedBeaconBlock` by first transforming it into a `SignatureVerifiedBlock`
-    /// and then using that implementation of `IntoExecutionPendingBlock` to complete verification.
-    fn into_execution_pending_block_slashable(
-        self,
-        block_root: Hash256,
-        chain: &Arc<BeaconChain<T>>,
-        notify_execution_layer: NotifyExecutionLayer,
-    ) -> Result<ExecutionPendingBlock<T>, BlockSlashInfo<BlockError>> {
-        // Perform an early check to prevent wasting time on irrelevant blocks.
-        let block_root = check_block_relevancy(&self, block_root, chain)
-            .map_err(|e| BlockSlashInfo::SignatureNotChecked(self.signed_block_header(), e))?;
-        let maybe_available = chain
-            .data_availability_checker
-            .verify_kzg_for_rpc_block(RpcBlock::new_without_blobs(Some(block_root), self.clone()))
-            .map_err(|e| {
-                BlockSlashInfo::SignatureNotChecked(
-                    self.signed_block_header(),
-                    BlockError::AvailabilityCheck(e),
-                )
-            })?;
-        SignatureVerifiedBlock::check_slashable(maybe_available, block_root, chain)?
-            .into_execution_pending_block_slashable(block_root, chain, notify_execution_layer)
-    }
-
-    fn block(&self) -> &SignedBeaconBlock<T::EthSpec> {
-        self
-    }
-
-    fn block_cloned(&self) -> Arc<SignedBeaconBlock<T::EthSpec>> {
-        self.clone()
     }
 }
 
@@ -1343,7 +1360,6 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
         /*
          *  Perform cursory checks to see if the block is even worth processing.
          */
-
         check_block_relevancy(block.as_block(), block_root, chain)?;
 
         // Define a future that will verify the execution payload with an execution engine.
@@ -1410,21 +1426,7 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
 
         let catchup_timer = metrics::start_timer(&metrics::BLOCK_PROCESSING_CATCHUP_STATE);
 
-        // Stage a batch of operations to be completed atomically if this block is imported
-        // successfully. If there is a skipped slot, we include the state root of the pre-state,
-        // which may be an advanced state that was stored in the DB with a `temporary` flag.
         let mut state = parent.pre_state;
-
-        let mut confirmed_state_roots =
-            if block.slot() > state.slot() && state.slot() > parent.beacon_block.slot() {
-                // Advanced pre-state. Delete its temporary flag.
-                let pre_state_root = state.update_tree_hash_cache()?;
-                vec![pre_state_root]
-            } else {
-                // Pre state is either unadvanced, or should not be stored long-term because there
-                // is no skipped slot between `parent` and `block`.
-                vec![]
-            };
 
         // The block must have a higher slot than its parent.
         if block.slot() <= parent.beacon_block.slot() {
@@ -1472,37 +1474,28 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
                 // processing, but we get early access to it.
                 let state_root = state.update_tree_hash_cache()?;
 
-                // Store the state immediately, marking it as temporary, and staging the deletion
-                // of its temporary status as part of the larger atomic operation.
+                // Store the state immediately.
                 let txn_lock = chain.store.hot_db.begin_rw_transaction();
                 let state_already_exists =
                     chain.store.load_hot_state_summary(&state_root)?.is_some();
 
                 let state_batch = if state_already_exists {
-                    // If the state exists, it could be temporary or permanent, but in neither case
-                    // should we rewrite it or store a new temporary flag for it. We *will* stage
-                    // the temporary flag for deletion because it's OK to double-delete the flag,
-                    // and we don't mind if another thread gets there first.
+                    // If the state exists, we do not need to re-write it.
                     vec![]
                 } else {
-                    vec![
-                        if state.slot() % T::EthSpec::slots_per_epoch() == 0 {
-                            StoreOp::PutState(state_root, &state)
-                        } else {
-                            StoreOp::PutStateSummary(
-                                state_root,
-                                HotStateSummary::new(&state_root, &state)?,
-                            )
-                        },
-                        StoreOp::PutStateTemporaryFlag(state_root),
-                    ]
+                    vec![if state.slot() % T::EthSpec::slots_per_epoch() == 0 {
+                        StoreOp::PutState(state_root, &state)
+                    } else {
+                        StoreOp::PutStateSummary(
+                            state_root,
+                            HotStateSummary::new(&state_root, &state)?,
+                        )
+                    }]
                 };
                 chain
                     .store
                     .do_atomically_with_block_and_blobs_cache(state_batch)?;
                 drop(txn_lock);
-
-                confirmed_state_roots.push(state_root);
 
                 state_root
             };
@@ -1511,10 +1504,9 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
                 // Expose Prometheus metrics.
                 if let Err(e) = summary.observe_metrics() {
                     error!(
-                        chain.log,
-                        "Failed to observe epoch summary metrics";
-                        "src" => "block_verification",
-                        "error" => ?e
+                        src = "block_verification",
+                        error = ?e,
+                        "Failed to observe epoch summary metrics"
                     );
                 }
                 summaries.push(summary);
@@ -1542,9 +1534,8 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
                         validator_monitor.process_validator_statuses(epoch, summary, &chain.spec)
                     {
                         error!(
-                            chain.log,
-                            "Failed to process validator statuses";
-                            "error" => ?e
+                            error = ?e,
+                            "Failed to process validator statuses"
                         );
                     }
                 }
@@ -1584,12 +1575,8 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
          * invalid.
          */
 
-        write_state(
-            &format!("state_pre_block_{}", block_root),
-            &state,
-            &chain.log,
-        );
-        write_block(block.as_block(), block_root, &chain.log);
+        write_state(&format!("state_pre_block_{}", block_root), &state);
+        write_block(block.as_block(), block_root);
 
         let core_timer = metrics::start_timer(&metrics::BLOCK_PROCESSING_CORE);
 
@@ -1622,11 +1609,7 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
 
         metrics::stop_timer(state_root_timer);
 
-        write_state(
-            &format!("state_post_block_{}", block_root),
-            &state,
-            &chain.log,
-        );
+        write_state(&format!("state_post_block_{}", block_root), &state);
 
         /*
          * Check to ensure the state root on the block matches the one we have calculated.
@@ -1680,25 +1663,11 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
                 state,
                 parent_block: parent.beacon_block,
                 parent_eth1_finalization_data,
-                confirmed_state_roots,
                 consensus_context,
             },
             payload_verification_handle,
         })
     }
-}
-
-/// Returns `Ok(())` if the block's slot is greater than the anchor block's slot (if any).
-fn check_block_against_anchor_slot<T: BeaconChainTypes>(
-    block: BeaconBlockRef<'_, T::EthSpec>,
-    chain: &BeaconChain<T>,
-) -> Result<(), BlockError> {
-    if let Some(anchor_slot) = chain.store.get_anchor_slot() {
-        if block.slot() <= anchor_slot {
-            return Err(BlockError::WeakSubjectivityConflict);
-        }
-    }
-    Ok(())
 }
 
 /// Returns `Ok(())` if the block is later than the finalized slot on `chain`.
@@ -1745,7 +1714,22 @@ pub fn check_block_is_finalized_checkpoint_or_descendant<
     fork_choice: &BeaconForkChoice<T>,
     block: B,
 ) -> Result<B, BlockError> {
-    if fork_choice.is_finalized_checkpoint_or_descendant(block.parent_root()) {
+    // If we have a split block newer than finalization then we also ban blocks which are not
+    // descended from that split block. It's important not to try checking `is_descendant` if
+    // finality is ahead of the split and the split block has been pruned, as `is_descendant` will
+    // return `false` in this case.
+    let finalized_slot = fork_choice
+        .finalized_checkpoint()
+        .epoch
+        .start_slot(T::EthSpec::slots_per_epoch());
+    let split = chain.store.get_split_info();
+    let is_descendant_from_split_block = split.slot == 0
+        || split.slot <= finalized_slot
+        || fork_choice.is_descendant(split.block_root, block.parent_root());
+
+    if fork_choice.is_finalized_checkpoint_or_descendant(block.parent_root())
+        && is_descendant_from_split_block
+    {
         Ok(block)
     } else {
         // If fork choice does *not* consider the parent to be a descendant of the finalized block,
@@ -1930,19 +1914,17 @@ fn load_parent<T: BeaconChainTypes, B: AsBlock<T::EthSpec>>(
 
         if !state.all_caches_built() {
             debug!(
-                chain.log,
-                "Parent state lacks built caches";
-                "block_slot" => block.slot(),
-                "state_slot" => state.slot(),
+                block_slot = %block.slot(),
+                state_slot = %state.slot(),
+                "Parent state lacks built caches"
             );
         }
 
         if block.slot() != state.slot() {
             debug!(
-                chain.log,
-                "Parent state is not advanced";
-                "block_slot" => block.slot(),
-                "state_slot" => state.slot(),
+                block_slot = %block.slot(),
+                state_slot = %state.slot(),
+                "Parent state is not advanced"
             );
         }
 
@@ -1998,7 +1980,7 @@ impl BlockBlobError for BlockError {
     }
 
     fn proposer_signature_invalid() -> Self {
-        BlockError::ProposalSignatureInvalid
+        BlockError::InvalidSignature(InvalidSignature::ProposerSignature)
     }
 }
 
@@ -2091,6 +2073,7 @@ pub fn get_validator_pubkey_cache<T: BeaconChainTypes>(
 ///
 /// The signature verifier is empty because it does not yet have any of this block's signatures
 /// added to it. Use `Self::apply_to_signature_verifier` to apply the signatures.
+#[allow(clippy::type_complexity)]
 fn get_signature_verifier<'a, T: BeaconChainTypes>(
     state: &'a BeaconState<T::EthSpec>,
     validator_pubkey_cache: &'a ValidatorPubkeyCache<T>,
@@ -2147,14 +2130,11 @@ pub fn verify_header_signature<T: BeaconChainTypes, Err: BlockBlobError>(
     }
 }
 
-fn write_state<E: EthSpec>(prefix: &str, state: &BeaconState<E>, log: &Logger) {
+fn write_state<E: EthSpec>(prefix: &str, state: &BeaconState<E>) {
     if WRITE_BLOCK_PROCESSING_SSZ {
         let mut state = state.clone();
         let Ok(root) = state.canonical_root() else {
-            error!(
-                log,
-                "Unable to hash state for writing";
-            );
+            error!("Unable to hash state for writing");
             return;
         };
         let filename = format!("{}_slot_{}_root_{}.ssz", prefix, state.slot(), root);
@@ -2167,16 +2147,15 @@ fn write_state<E: EthSpec>(prefix: &str, state: &BeaconState<E>, log: &Logger) {
                 let _ = file.write_all(&state.as_ssz_bytes());
             }
             Err(e) => error!(
-                log,
-                "Failed to log state";
-                "path" => format!("{:?}", path),
-                "error" => format!("{:?}", e)
+                ?path,
+                error = ?e,
+                "Failed to log state"
             ),
         }
     }
 }
 
-fn write_block<E: EthSpec>(block: &SignedBeaconBlock<E>, root: Hash256, log: &Logger) {
+fn write_block<E: EthSpec>(block: &SignedBeaconBlock<E>, root: Hash256) {
     if WRITE_BLOCK_PROCESSING_SSZ {
         let filename = format!("block_slot_{}_root{}.ssz", block.slot(), root);
         let mut path = std::env::temp_dir().join("lighthouse");
@@ -2188,10 +2167,9 @@ fn write_block<E: EthSpec>(block: &SignedBeaconBlock<E>, root: Hash256, log: &Lo
                 let _ = file.write_all(&block.as_ssz_bytes());
             }
             Err(e) => error!(
-                log,
-                "Failed to log block";
-                "path" => format!("{:?}", path),
-                "error" => format!("{:?}", e)
+                ?path,
+                error = ?e,
+                "Failed to log block"
             ),
         }
     }
