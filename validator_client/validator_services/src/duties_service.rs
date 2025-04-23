@@ -990,6 +990,9 @@ async fn poll_beacon_attesters_for_epoch<T: SlotClock + 'static, E: EthSpec>(
     // Spawn the background task to compute selection proofs.
     let subservice = duties_service.clone();
 
+    // Define a config to be pass to fill_in_selection_proofs.
+    // The defined config here defaults to using selections_endpoint and parallel_sign (i.e., distributed mode)
+    // Other DVT applications, e.g., Anchor can pass in different configs to suit different needs.
     let config = SelectionProofConfig {
         lookahead_slot: if duties_service.distributed {
             SELECTION_PROOF_SLOT_LOOKAHEAD_DVT
@@ -1091,6 +1094,7 @@ async fn post_validator_duties_attester<T: SlotClock + 'static, E: EthSpec>(
         .map_err(|e| Error::FailedToDownloadAttesters(e.to_string()))
 }
 
+// Create a helper function here to reduce code duplication for normal and distributed mode
 fn process_duty_and_proof<E: EthSpec>(
     attesters: &mut RwLockWriteGuard<AttesterMap>,
     result: Result<(AttesterData, Option<SelectionProof>), Error>,
@@ -1107,6 +1111,7 @@ fn process_duty_and_proof<E: EthSpec>(
                 "Missing pubkey for duty and proof"
             );
             // Do not abort the entire batch for a single failure.
+            // return true means continue processing duties.
             return true;
         }
         Err(e) => {
@@ -1157,6 +1162,7 @@ fn process_duty_and_proof<E: EthSpec>(
         }
     }
 }
+
 /// Compute the attestation selection proofs for the `duties` and add them to the `attesters` map.
 ///
 /// Duties are computed in batches each slot. If a re-org is detected then the process will
@@ -1190,8 +1196,8 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
 
             let lookahead_slot = current_slot + selection_lookahead;
 
-            let relevant_duties = if duties_service.distributed {
-                // Remove old slot duties and only keep current duties
+            let relevant_duties = if config.selections_endpoint {
+                // Remove old slot duties and only keep current duties in distributed mode
                 duties_by_slot
                     .remove(&lookahead_slot)
                     .map(|duties| BTreeMap::from([(lookahead_slot, duties)]))
@@ -1235,6 +1241,7 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
 
                 while let Some(result) = duty_and_proof_results.next().await {
                     let mut attesters = duties_service.attesters.write();
+                    // if process_duty_and_proof returns false, exit the loop
                     if !process_duty_and_proof::<E>(
                         &mut attesters,
                         result,
@@ -1245,6 +1252,7 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                     }
                 }
             } else {
+                // In normal (non-distributed case), sign selection proofs serially
                 let duty_and_proof_results = stream::iter(relevant_duties.into_values().flatten())
                     .then(|duty| async {
                         let opt_selection_proof = make_selection_proof(

@@ -1,5 +1,5 @@
 use crate::duties_service::{DutiesService, Error, SelectionProofConfig};
-use beacon_node_fallback::BeaconNodeFallback;
+// use beacon_node_fallback::BeaconNodeFallback;
 use doppelganger_service::DoppelgangerStatus;
 use eth2::types::{Signature, SyncCommitteeSelection};
 use futures::future::join_all;
@@ -352,10 +352,12 @@ pub async fn poll_sync_committee_duties<T: SlotClock + 'static, E: EthSpec>(
         let sub_duties_service = duties_service.clone();
         duties_service.context.executor.spawn(
             async move {
+                // The defined config here defaults to using selections_endpoint and parallel_sign (i.e., distributed mode)
+                // Other DVT applications, e.g., Anchor can pass in different configs to suit different needs.
                 let config = SelectionProofConfig {
                     lookahead_slot: sub_duties_service
                         .sync_duties
-                        .aggregation_pre_compute_slots(),
+                        .aggregation_pre_compute_slots(), // Use the current behaviour defined in the method
                     computation_offset: Duration::from_secs(0),
                     selections_endpoint: sub_duties_service.sync_duties.distributed,
                     parallel_sign: sub_duties_service.sync_duties.distributed,
@@ -520,13 +522,13 @@ pub async fn poll_sync_committee_duties_for_period<T: SlotClock + 'static, E: Et
     Ok(())
 }
 
+// Create a helper function here to reduce code duplication for normal and distributed mode
 pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
     duties_service: &Arc<DutiesService<T, E>>,
     duty: &SyncDuty,
     proof_slot: Slot,
     subnet_id: SyncSubnetId,
     config: &SelectionProofConfig,
-    _beacon_nodes: &Arc<BeaconNodeFallback<T, E>>,
 ) -> Option<SyncSelectionProof> {
     let sync_selection_proof = duties_service
         .validator_store
@@ -554,12 +556,13 @@ pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
         }
     };
 
-    // In --distributed mode when we want to call the selections endpoint
+    // In distributed mode when we want to call the selections endpoint
     if config.selections_endpoint {
         debug!(
             "validator_index" = duty.validator_index,
             "slot" = %proof_slot,
             "subcommittee_index" = *subnet_id,
+            // In distributed mode, this is partial selection proof
             "partial selection proof" = ?Signature::from(selection_proof.clone()),
             "Sending sync selection to middleware"
         );
@@ -589,16 +592,16 @@ pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
         match middleware_response {
             Ok(response) => {
                 let response_data = &response.data[0];
-                // The selection proof from middleware response will be a full selection proof
                 debug!(
                     "validator_index" = response_data.validator_index,
                     "slot" = %response_data.slot,
                     "subcommittee_index" = response_data.subcommittee_index,
+                    // The selection proof from middleware response will be a full selection proof
                     "full selection proof" = ?response_data.selection_proof,
                     "Received sync selection from middleware"
                 );
 
-                // Convert the response to a SyncSelectionProof so we can call the is_aggregator method
+                // Convert the response to a SyncSelectionProof
                 let full_selection_proof =
                     SyncSelectionProof::from(response_data.selection_proof.clone());
                 Some(full_selection_proof)
@@ -613,7 +616,7 @@ pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
             }
         }
     } else {
-        // When calling the selections endpoint is not required, return the selection_proof
+        // When calling the selections endpoint is not required, the selection_proof is already a full selection proof
         Some(selection_proof)
     }
 }
@@ -648,7 +651,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                 // Construct proof for prior slot.
                 let proof_slot = slot - 1;
 
-                // Store all partial sync selection proofs so that it can be sent together later
+                // Calling the make_sync_selection_proof will return a full selection proof
                 for &subnet_id in &subnet_ids {
                     let duties_service = duties_service.clone();
                     futures_unordered.push(async move {
@@ -658,7 +661,6 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                             proof_slot,
                             subnet_id,
                             config_ref,
-                            &duties_service.beacon_nodes,
                         )
                         .await;
 
@@ -749,7 +751,6 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                         proof_slot,
                         *subnet_id,
                         config_ref,
-                        &duties_service_ref.beacon_nodes,
                     )
                     .await;
 
