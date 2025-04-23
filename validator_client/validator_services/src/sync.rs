@@ -616,7 +616,7 @@ pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
             }
         }
     } else {
-        // When calling the selections endpoint is not required, the selection_proof is already a full selection proof
+        // In non-distributed mode, the selection_proof is already a full selection proof
         Some(selection_proof)
     }
 }
