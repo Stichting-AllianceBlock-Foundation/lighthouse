@@ -662,15 +662,6 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                         )
                         .await;
 
-                        if let Some(proof) = &result {
-                            debug!(
-                                validator_index = duty.validator_index,
-                                "slot" = %proof_slot,
-                                "subcommittee_index" = *subnet_id,
-                                "full selection proof" = ?proof,
-                                "Selection proof in result variable"
-                            );
-                        }
                         result.map(|proof| (duty.validator_index, proof_slot, subnet_id, proof))
                     });
                 }

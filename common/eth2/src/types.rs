@@ -939,7 +939,6 @@ pub struct BeaconCommitteeSelection {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-
 pub struct SyncCommitteeSelection {
     #[serde(with = "serde_utils::quoted_u64")]
     pub validator_index: u64,
