@@ -10,7 +10,6 @@ use slot_clock::SlotClock;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, PublicKeyBytes, Slot, SyncDuty, SyncSelectionProof, SyncSubnetId};
 use validator_store::Error as ValidatorStoreError;
@@ -36,7 +35,7 @@ pub struct SyncDutiesMap<E: EthSpec> {
     /// Map from sync committee period to duties for members of that sync committee.
     committees: RwLock<HashMap<u64, CommitteeDuties>>,
     /// Whether we are in `distributed` mode and using reduced lookahead for aggregate pre-compute.
-    distributed: bool,
+    pub selection_proof_config: SelectionProofConfig,
     _phantom: PhantomData<E>,
 }
 
@@ -86,10 +85,10 @@ pub struct SlotDuties {
 }
 
 impl<E: EthSpec> SyncDutiesMap<E> {
-    pub fn new(distributed: bool) -> Self {
+    pub fn new(selection_proof_config: SelectionProofConfig) -> Self {
         Self {
             committees: RwLock::new(HashMap::new()),
-            distributed,
+            selection_proof_config,
             _phantom: PhantomData,
         }
     }
@@ -109,7 +108,7 @@ impl<E: EthSpec> SyncDutiesMap<E> {
 
     /// Number of slots in advance to compute selection proofs
     fn aggregation_pre_compute_slots(&self) -> u64 {
-        if self.distributed {
+        if self.selection_proof_config.parallel_sign {
             AGGREGATION_PRE_COMPUTE_SLOTS_DISTRIBUTED
         } else {
             E::slots_per_epoch() * AGGREGATION_PRE_COMPUTE_EPOCHS
@@ -354,14 +353,6 @@ pub async fn poll_sync_committee_duties<T: SlotClock + 'static, E: EthSpec>(
             async move {
                 // The defined config here defaults to using selections_endpoint and parallel_sign (i.e., distributed mode)
                 // Other DVT applications, e.g., Anchor can pass in different configs to suit different needs.
-                let config = SelectionProofConfig {
-                    lookahead_slot: sub_duties_service
-                        .sync_duties
-                        .aggregation_pre_compute_slots(), // Use the current behaviour defined in the method
-                    computation_offset: Duration::from_secs(0),
-                    selections_endpoint: sub_duties_service.sync_duties.distributed,
-                    parallel_sign: sub_duties_service.sync_duties.distributed,
-                };
 
                 fill_in_aggregation_proofs(
                     sub_duties_service,
@@ -369,7 +360,6 @@ pub async fn poll_sync_committee_duties<T: SlotClock + 'static, E: EthSpec>(
                     current_sync_committee_period,
                     current_slot,
                     current_pre_compute_slot,
-                    config,
                 )
                 .await
             },
@@ -408,22 +398,12 @@ pub async fn poll_sync_committee_duties<T: SlotClock + 'static, E: EthSpec>(
             let sub_duties_service = duties_service.clone();
             duties_service.context.executor.spawn(
                 async move {
-                    let config = SelectionProofConfig {
-                        lookahead_slot: sub_duties_service
-                            .sync_duties
-                            .aggregation_pre_compute_slots(),
-                        computation_offset: Duration::from_secs(0),
-                        selections_endpoint: sub_duties_service.sync_duties.distributed,
-                        parallel_sign: sub_duties_service.sync_duties.distributed,
-                    };
-
                     fill_in_aggregation_proofs(
                         sub_duties_service,
                         &new_pre_compute_duties,
                         next_sync_committee_period,
                         current_slot,
                         pre_compute_slot,
-                        config,
                     )
                     .await
                 },
@@ -528,7 +508,6 @@ pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
     duty: &SyncDuty,
     proof_slot: Slot,
     subnet_id: SyncSubnetId,
-    config: &SelectionProofConfig,
 ) -> Option<SyncSelectionProof> {
     let sync_selection_proof = duties_service
         .validator_store
@@ -557,7 +536,11 @@ pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
     };
 
     // In distributed mode when we want to call the selections endpoint
-    if config.selections_endpoint {
+    if duties_service
+        .sync_duties
+        .selection_proof_config
+        .selections_endpoint
+    {
         debug!(
             "validator_index" = duty.validator_index,
             "slot" = %proof_slot,
@@ -627,14 +610,16 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
     sync_committee_period: u64,
     current_slot: Slot,
     pre_compute_slot: Slot,
-    config: SelectionProofConfig,
 ) {
     // Generate selection proofs for each validator at each slot, one slot at a time.
     for slot in (current_slot.as_u64()..=pre_compute_slot.as_u64()).map(Slot::new) {
         // For distributed mode
-        if config.parallel_sign {
+        if duties_service
+            .sync_duties
+            .selection_proof_config
+            .parallel_sign
+        {
             let mut futures_unordered = FuturesUnordered::new();
-            let config_ref = &config;
 
             for (_, duty) in pre_compute_duties {
                 let subnet_ids = match duty.subnet_ids::<E>() {
@@ -655,14 +640,9 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                 for &subnet_id in &subnet_ids {
                     let duties_service = duties_service.clone();
                     futures_unordered.push(async move {
-                        let result = make_sync_selection_proof(
-                            &duties_service,
-                            duty,
-                            proof_slot,
-                            subnet_id,
-                            config_ref,
-                        )
-                        .await;
+                        let result =
+                            make_sync_selection_proof(&duties_service, duty, proof_slot, subnet_id)
+                                .await;
 
                         result.map(|proof| (duty.validator_index, proof_slot, subnet_id, proof))
                     });
@@ -740,19 +720,13 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
 
                 // Create futures to produce proofs.
                 let duties_service_ref = &duties_service;
-                let config_ref = &config;
                 let futures = subnet_ids.iter().map(|subnet_id| async move {
                     // Construct proof for prior slot.
                     let proof_slot = slot - 1;
 
-                    let proof = make_sync_selection_proof(
-                        duties_service_ref,
-                        duty,
-                        proof_slot,
-                        *subnet_id,
-                        config_ref,
-                    )
-                    .await;
+                    let proof =
+                        make_sync_selection_proof(duties_service_ref, duty, proof_slot, *subnet_id)
+                            .await;
 
                     match proof {
                         Some(proof) => match proof.is_aggregator::<E>() {

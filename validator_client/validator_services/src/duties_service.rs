@@ -37,17 +37,6 @@ use validator_store::{Error as ValidatorStoreError, ValidatorStore};
 /// Only retain `HISTORICAL_DUTIES_EPOCHS` duties prior to the current epoch.
 const HISTORICAL_DUTIES_EPOCHS: u64 = 2;
 
-/// Compute attestation selection proofs this many slots before they are required.
-///
-/// At start-up selection proofs will be computed with less lookahead out of necessity.
-const SELECTION_PROOF_SLOT_LOOKAHEAD: u64 = 8;
-
-/// The attestation selection proof lookahead for those running with the --distributed flag.
-const SELECTION_PROOF_SLOT_LOOKAHEAD_DVT: u64 = 1;
-
-/// Fraction of a slot at which selection proof signing should happen (2 means half way).
-const SELECTION_PROOF_SCHEDULE_DENOM: u32 = 2;
-
 /// Minimum number of validators for which we auto-enable per-validator metrics.
 /// For validators greater than this value, we need to manually set the `enable-per-validator-metrics`
 /// flag in the cli to enable collection of per validator metrics.
@@ -126,6 +115,7 @@ pub struct SubscriptionSlots {
     duty_slot: Slot,
 }
 
+#[derive(Clone)]
 pub struct SelectionProofConfig {
     pub lookahead_slot: u64,
     pub computation_offset: Duration, // The seconds to compute the selection proof before a slot
@@ -140,10 +130,10 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
     duty: &AttesterData,
     validator_store: &ValidatorStore<T, E>,
     spec: &ChainSpec,
-    config: &SelectionProofConfig,
+    duties_service: &DutiesService<T, E>,
     beacon_nodes: &Arc<BeaconNodeFallback<T, E>>,
 ) -> Result<Option<SelectionProof>, Error> {
-    let selection_proof = if config.selections_endpoint {
+    let selection_proof = if duties_service.selection_proof_config.selections_endpoint {
         let beacon_committee_selection = BeaconCommitteeSelection {
             validator_index: duty.validator_index,
             slot: duty.slot,
@@ -285,10 +275,10 @@ pub struct DutiesService<T, E: EthSpec> {
     pub context: RuntimeContext<E>,
     /// The current chain spec.
     pub spec: Arc<ChainSpec>,
-    //// Whether we permit large validator counts in the metrics.
+    /// Whether we permit large validator counts in the metrics.
     pub enable_high_validator_count_metrics: bool,
-    /// If this validator is running in distributed mode.
-    pub distributed: bool,
+    /// Pass the config for distributed or non-distributed mode.
+    pub selection_proof_config: SelectionProofConfig,
     pub disable_attesting: bool,
 }
 
@@ -990,24 +980,9 @@ async fn poll_beacon_attesters_for_epoch<T: SlotClock + 'static, E: EthSpec>(
     // Spawn the background task to compute selection proofs.
     let subservice = duties_service.clone();
 
-    // Define a config to be pass to fill_in_selection_proofs.
-    // The defined config here defaults to using selections_endpoint and parallel_sign (i.e., distributed mode)
-    // Other DVT applications, e.g., Anchor can pass in different configs to suit different needs.
-    let config = SelectionProofConfig {
-        lookahead_slot: if duties_service.distributed {
-            SELECTION_PROOF_SLOT_LOOKAHEAD_DVT
-        } else {
-            SELECTION_PROOF_SLOT_LOOKAHEAD
-        },
-        computation_offset: duties_service.slot_clock.slot_duration()
-            / SELECTION_PROOF_SCHEDULE_DENOM,
-        selections_endpoint: duties_service.distributed,
-        parallel_sign: duties_service.distributed,
-    };
-
     duties_service.context.executor.spawn(
         async move {
-            fill_in_selection_proofs(subservice, new_duties, dependent_root, config).await;
+            fill_in_selection_proofs(subservice, new_duties, dependent_root).await;
         },
         "duties_service_selection_proofs_background",
     );
@@ -1171,7 +1146,6 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
     duties_service: Arc<DutiesService<T, E>>,
     duties: Vec<AttesterData>,
     dependent_root: Hash256,
-    config: SelectionProofConfig,
 ) {
     // Sort duties by slot in a BTreeMap.
     let mut duties_by_slot: BTreeMap<Slot, Vec<_>> = BTreeMap::new();
@@ -1186,17 +1160,32 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
 
     while !duties_by_slot.is_empty() {
         if let Some(duration) = slot_clock.duration_to_next_slot() {
-            sleep(duration.saturating_sub(config.computation_offset)).await;
+            sleep(
+                duration.saturating_sub(
+                    duties_service
+                        .sync_duties
+                        .selection_proof_config
+                        .computation_offset,
+                ),
+            )
+            .await;
 
             let Some(current_slot) = slot_clock.now() else {
                 continue;
             };
 
-            let selection_lookahead = config.lookahead_slot;
+            let selection_lookahead = duties_service
+                .sync_duties
+                .selection_proof_config
+                .lookahead_slot;
 
             let lookahead_slot = current_slot + selection_lookahead;
 
-            let relevant_duties = if config.selections_endpoint {
+            let relevant_duties = if duties_service
+                .sync_duties
+                .selection_proof_config
+                .parallel_sign
+            {
                 // Remove old slot duties and only keep current duties in distributed mode
                 duties_by_slot
                     .remove(&lookahead_slot)
@@ -1222,7 +1211,11 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
             // In distributed case, we want to send all partial selection proofs to the middleware to determine aggregation duties,
             // as the middleware will need to have a threshold of partial selection proofs to be able to return the full selection proof
             // Thus, sign selection proofs in parallel in distributed case; Otherwise, sign them serially in non-distributed (normal) case
-            if config.parallel_sign {
+            if duties_service
+                .sync_duties
+                .selection_proof_config
+                .parallel_sign
+            {
                 let mut duty_and_proof_results = relevant_duties
                     .into_values()
                     .flatten()
@@ -1231,7 +1224,7 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                             &duty,
                             &duties_service.validator_store,
                             &duties_service.spec,
-                            &config,
+                            &duties_service,
                             &duties_service.beacon_nodes,
                         )
                         .await?;
@@ -1259,7 +1252,7 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                             &duty,
                             &duties_service.validator_store,
                             &duties_service.spec,
-                            &config,
+                            &duties_service,
                             &duties_service.beacon_nodes,
                         )
                         .await?;
