@@ -469,7 +469,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
         } else {
             SelectionProofConfig {
                 lookahead_slot: SELECTION_PROOF_SLOT_LOOKAHEAD,
-                computation_offset: Duration::from_secs(6),
+                computation_offset: slot_clock.slot_duration() / SELECTION_PROOF_SCHEDULE_DENOM,
                 selections_endpoint: false,
                 parallel_sign: false,
             }

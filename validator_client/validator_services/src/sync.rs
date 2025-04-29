@@ -351,9 +351,6 @@ pub async fn poll_sync_committee_duties<T: SlotClock + 'static, E: EthSpec>(
         let sub_duties_service = duties_service.clone();
         duties_service.context.executor.spawn(
             async move {
-                // The defined config here defaults to using selections_endpoint and parallel_sign (i.e., distributed mode)
-                // Other DVT applications, e.g., Anchor can pass in different configs to suit different needs.
-
                 fill_in_aggregation_proofs(
                     sub_duties_service,
                     &new_pre_compute_duties,
