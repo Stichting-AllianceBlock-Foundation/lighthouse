@@ -1592,7 +1592,7 @@ pub fn cli_app() -> Command {
                         Higher values may prevent messages from being dropped while lower values \
                         may help protect the node from becoming overwhelmed.")
                 .hide(true)
-                .default_value("12288")
+                .default_value("24576")
                 .action(ArgAction::Set)
                 .display_order(0)
         )
