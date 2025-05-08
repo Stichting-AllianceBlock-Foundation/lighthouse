@@ -77,7 +77,7 @@ pub mod work_reprocessing_queue;
 /// The maximum size of the channel for work events to the `BeaconProcessor`.
 ///
 /// Setting this too low will cause consensus messages to be dropped.
-const DEFAULT_MAX_WORK_EVENT_QUEUE_LEN: usize = 16_384;
+const DEFAULT_MAX_WORK_EVENT_QUEUE_LEN: usize = 32_768;
 
 /// The maximum size of the channel for idle events to the `BeaconProcessor`.
 ///
