@@ -114,7 +114,7 @@ pub struct SubscriptionSlots {
     duty_slot: Slot,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct SelectionProofConfig {
     pub lookahead_slot: u64,
     pub computation_offset: Duration, // The seconds to compute the selection proof before a slot
