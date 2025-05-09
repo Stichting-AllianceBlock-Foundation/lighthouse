@@ -278,7 +278,8 @@ pub struct DutiesServiceBuilder<S, T> {
     //// Whether we permit large validator counts in the metrics.
     enable_high_validator_count_metrics: bool,
     /// If this validator is running in distributed mode.
-    selection_proof_config: SelectionProofConfig,
+    attestation_selection_proof_config: SelectionProofConfig,
+    sync_selection_proof_config: SelectionProofConfig,
     disable_attesting: bool,
 }
 
@@ -297,7 +298,8 @@ impl<S, T> DutiesServiceBuilder<S, T> {
             executor: None,
             spec: None,
             enable_high_validator_count_metrics: false,
-            selection_proof_config: SelectionProofConfig::default(),
+            attestation_selection_proof_config: SelectionProofConfig::default(),
+            sync_selection_proof_config: SelectionProofConfig::default(),
             disable_attesting: false,
         }
     }
@@ -335,8 +337,19 @@ impl<S, T> DutiesServiceBuilder<S, T> {
         self
     }
 
-    pub fn selection_proof_config(mut self, selection_proof_config: SelectionProofConfig) -> Self {
-        self.selection_proof_config = selection_proof_config;
+    pub fn attestation_selection_proof_config(
+        mut self,
+        attestation_selection_proof_config: SelectionProofConfig,
+    ) -> Self {
+        self.attestation_selection_proof_config = attestation_selection_proof_config;
+        self
+    }
+
+    pub fn sync_selection_proof_config(
+        mut self,
+        sync_selection_proof_config: SelectionProofConfig,
+    ) -> Self {
+        self.sync_selection_proof_config = sync_selection_proof_config;
         self
     }
 
@@ -349,7 +362,7 @@ impl<S, T> DutiesServiceBuilder<S, T> {
         Ok(DutiesService {
             attesters: Default::default(),
             proposers: Default::default(),
-            sync_duties: SyncDutiesMap::new(self.selection_proof_config),
+            sync_duties: SyncDutiesMap::new(self.sync_selection_proof_config),
             validator_store: self
                 .validator_store
                 .ok_or("Cannot build DutiesService without validator_store")?,
@@ -365,7 +378,7 @@ impl<S, T> DutiesServiceBuilder<S, T> {
                 .ok_or("Cannot build DutiesService without executor")?,
             spec: self.spec.ok_or("Cannot build DutiesService without spec")?,
             enable_high_validator_count_metrics: self.enable_high_validator_count_metrics,
-            selection_proof_config: self.selection_proof_config,
+            selection_proof_config: self.attestation_selection_proof_config,
             disable_attesting: self.disable_attesting,
         })
     }

@@ -483,7 +483,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             }
         };
 
-        let _sync_selection_proof_config = if config.distributed {
+        let sync_selection_proof_config = if config.distributed {
             SelectionProofConfig {
                 lookahead_slot: AGGREGATION_PRE_COMPUTE_SLOTS_DISTRIBUTED,
                 computation_offset: Duration::default(),
@@ -509,7 +509,8 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
                 .spec(context.eth2_config.spec.clone())
                 .executor(context.executor.clone())
                 .enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
-                .selection_proof_config(attestation_selection_proof_config)
+                .attestation_selection_proof_config(attestation_selection_proof_config)
+                .sync_selection_proof_config(sync_selection_proof_config)
                 .disable_attesting(config.disable_attesting)
                 .build()?,
         );
