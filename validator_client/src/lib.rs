@@ -430,8 +430,10 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             .register_all_in_doppelganger_protection_if_enabled()
             .await?;
 
+        let voting_validators = validator_store.num_voting_validators().await;
+
         info!(
-            voting_validators = validator_store.num_voting_validators().await,
+            voting_validators,
             "Loaded validator keypair store"
         );
 
