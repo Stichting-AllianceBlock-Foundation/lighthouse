@@ -18,6 +18,7 @@ use crate::sync::range_sync::{
 };
 use beacon_chain::block_verification_types::RpcBlock;
 use beacon_chain::{BeaconChain, BeaconChainTypes};
+use itertools::Itertools;
 use lighthouse_network::service::api_types::Id;
 use lighthouse_network::types::{BackFillState, NetworkGlobals};
 use lighthouse_network::{PeerAction, PeerId};
@@ -29,6 +30,8 @@ use std::collections::{
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 use types::{Epoch, EthSpec};
+
+use super::range_sync::BatchPeers;
 
 /// Blocks are downloaded in batches from peers. This constant specifies how many epochs worth of
 /// blocks per batch are requested _at most_. A batch may request less blocks to account for
@@ -128,12 +131,6 @@ pub struct BackFillSync<T: BeaconChainTypes> {
     /// Batches validated by this chain.
     validated_batches: u64,
 
-    /// We keep track of peers that are participating in the backfill sync. Unlike RangeSync,
-    /// BackFillSync uses all synced peers to download the chain from. If BackFillSync fails, we don't
-    /// want to penalize all our synced peers, so we use this variable to keep track of peers that
-    /// have participated and only penalize these peers if backfill sync fails.
-    participating_peers: HashSet<PeerId>,
-
     /// When a backfill sync fails, we keep track of whether a new fully synced peer has joined.
     /// This signifies that we are able to attempt to restart a failed chain.
     restart_failed_sync: bool,
@@ -181,7 +178,6 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
             network_globals,
             current_processing_batch: None,
             validated_batches: 0,
-            participating_peers: HashSet::new(),
             restart_failed_sync: false,
             beacon_chain,
         };
@@ -302,25 +298,6 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         }
     }
 
-    /// A peer has disconnected.
-    /// If the peer has active batches, those are considered failed and re-requested.
-    #[instrument(parent = None,
-        level = "info",
-        fields(service = "backfill_sync"),
-        name = "backfill_sync",
-        skip_all
-    )]
-    #[must_use = "A failure here indicates the backfill sync has failed and the global sync state should be updated"]
-    pub fn peer_disconnected(&mut self, peer_id: &PeerId) -> Result<(), BackFillError> {
-        if matches!(self.state(), BackFillState::Failed) {
-            return Ok(());
-        }
-
-        // Remove the peer from the participation list
-        self.participating_peers.remove(peer_id);
-        Ok(())
-    }
-
     /// An RPC error has occurred.
     ///
     /// If the batch exists it is re-requested.
@@ -378,7 +355,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         &mut self,
         network: &mut SyncNetworkContext<T>,
         batch_id: BatchId,
-        peer_id: &PeerId,
+        batch_peers: BatchPeers,
         request_id: Id,
         blocks: Vec<RpcBlock<T::EthSpec>>,
     ) -> Result<ProcessResult, BackFillError> {
@@ -399,7 +376,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
             return Ok(ProcessResult::Successful);
         }
 
-        match batch.download_completed(blocks, *peer_id) {
+        match batch.download_completed(blocks, batch_peers) {
             Ok(received) => {
                 let awaiting_batches =
                     self.processing_target.saturating_sub(batch_id) / BACKFILL_EPOCHS_PER_BATCH;
@@ -440,7 +417,6 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         self.set_state(BackFillState::Failed);
         // Remove all batches and active requests and participating peers.
         self.batches.clear();
-        self.participating_peers.clear();
         self.restart_failed_sync = false;
 
         // Reset all downloading and processing targets
@@ -573,7 +549,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
             }
         };
 
-        let Some(peer) = batch.processing_peer() else {
+        let Some(batch_peers) = batch.processing_peers() else {
             self.fail_sync(BackFillError::BatchInvalidState(
                 batch_id,
                 String::from("Peer does not exist"),
@@ -585,8 +561,6 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
             ?result,
             %batch,
             batch_epoch = %batch_id,
-            %peer,
-            client = %network.client_type(peer),
             "Backfill batch processed"
         );
 
@@ -628,31 +602,52 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
             }
             BatchProcessResult::FaultyFailure {
                 imported_blocks,
-                penalty,
+                peer_action,
+                error,
             } => {
+                // TODO(sync): De-dup between back and forwards sync
+                if let Some(penalty) = peer_action.block_peer {
+                    // Penalize the peer appropiately.
+                    network.report_peer(batch_peers.block(), penalty, "faulty_batch");
+                }
+
+                // Penalize each peer only once. Currently a peer_action does not mix different
+                // PeerAction levels.
+                for (peer, penalty) in peer_action
+                    .column_peer
+                    .iter()
+                    .filter_map(|(column_index, penalty)| {
+                        batch_peers
+                            .column(column_index)
+                            .map(|peer| (*peer, *penalty))
+                    })
+                    .unique()
+                {
+                    network.report_peer(peer, penalty, "faulty_batch_column");
+                }
+
                 match batch.processing_completed(BatchProcessingResult::FaultyFailure) {
                     Err(e) => {
                         // Batch was in the wrong state
                         self.fail_sync(BackFillError::BatchInvalidState(batch_id, e.0))
                             .map(|_| ProcessResult::Successful)
                     }
-                    Ok(BatchOperationOutcome::Failed { blacklist: _ }) => {
-                        // check that we have not exceeded the re-process retry counter
-                        // If a batch has exceeded the invalid batch lookup attempts limit, it means
-                        // that it is likely all peers are sending invalid batches
-                        // repeatedly and are either malicious or faulty. We stop the backfill sync and
-                        // report all synced peers that have participated.
+                    Ok(BatchOperationOutcome::Failed { .. }) => {
+                        // When backfill syncing post-PeerDAS we can't attribute fault to previous
+                        // peers if a batch fails to process too many times. We have strict peer
+                        // scoring for faulty errors, so participating peers that sent invalid
+                        // data are already downscored.
+                        //
+                        // Because backfill sync deals with historical data that we can assert
+                        // to be correct, once we import a batch that contains at least one
+                        // block we are sure we got the right data. There's no need to penalize
+                        // all participating peers in backfill sync if a batch fails
                         warn!(
-                            score_adjustment = %penalty,
                             batch_epoch = %batch_id,
-                            "Backfill batch failed to download. Penalizing peers"
+                            error,
+                            "Backfill sync failed after attempting to process batch too many times"
                         );
 
-                        for peer in self.participating_peers.drain() {
-                            // TODO(das): `participating_peers` only includes block peers. Should we
-                            // penalize the custody column peers too?
-                            network.report_peer(peer, *penalty, "backfill_batch_failed");
-                        }
                         self.fail_sync(BackFillError::BatchProcessingFailed(batch_id))
                             .map(|_| ProcessResult::Successful)
                     }
@@ -781,37 +776,38 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                         // The validated batch has been re-processed
                         if attempt.hash != processed_attempt.hash {
                             // The re-downloaded version was different.
-                            if processed_attempt.peer_id != attempt.peer_id {
+                            // TODO(das): should penalize other peers?
+                            let valid_attempt_peer = processed_attempt.block_peer();
+                            let bad_attempt_peer = attempt.block_peer();
+                            if valid_attempt_peer != bad_attempt_peer {
                                 // A different peer sent the correct batch, the previous peer did not
                                 // We negatively score the original peer.
                                 let action = PeerAction::LowToleranceError;
                                 debug!(
-                                    batch_epoch = ?id,
-                                    score_adjustment = %action,
-                                    original_peer = %attempt.peer_id,
-                                    new_peer = %processed_attempt.peer_id,
+                                    batch_epoch = %id, score_adjustment = %action,
+                                    original_peer = %bad_attempt_peer, new_peer = %valid_attempt_peer,
                                     "Re-processed batch validated. Scoring original peer"
                                 );
                                 network.report_peer(
-                                    attempt.peer_id,
+                                    bad_attempt_peer,
                                     action,
-                                    "backfill_reprocessed_original_peer",
+                                    "batch_reprocessed_original_peer",
                                 );
                             } else {
                                 // The same peer corrected it's previous mistake. There was an error, so we
                                 // negative score the original peer.
                                 let action = PeerAction::MidToleranceError;
                                 debug!(
-                                    batch_epoch = ?id,
+                                    batch_epoch = %id,
                                     score_adjustment = %action,
-                                    original_peer = %attempt.peer_id,
-                                    new_peer = %processed_attempt.peer_id,
+                                    original_peer = %bad_attempt_peer,
+                                    new_peer = %valid_attempt_peer,
                                     "Re-processed batch validated by the same peer"
                                 );
                                 network.report_peer(
-                                    attempt.peer_id,
+                                    bad_attempt_peer,
                                     action,
-                                    "backfill_reprocessed_same_peer",
+                                    "batch_reprocessed_same_peer",
                                 );
                             }
                         }
@@ -926,10 +922,9 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                 .cloned()
                 .collect::<HashSet<_>>();
 
-            let (request, is_blob_batch) = batch.to_blocks_by_range_request();
-            let failed_peers = batch.failed_peers();
+            let request = batch.to_blocks_by_range_request();
+            let failed_peers = batch.failed_block_peers();
             match network.block_components_by_range_request(
-                is_blob_batch,
                 request,
                 RangeRequestId::BackfillSync { batch_id },
                 &synced_peers,
@@ -1089,12 +1084,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                 self.include_next_batch(network)
             }
             Entry::Vacant(entry) => {
-                let batch_type = network.batch_type(batch_id);
-                entry.insert(BatchInfo::new(
-                    &batch_id,
-                    BACKFILL_EPOCHS_PER_BATCH,
-                    batch_type,
-                ));
+                entry.insert(BatchInfo::new(&batch_id, BACKFILL_EPOCHS_PER_BATCH));
                 if self.would_complete(batch_id) {
                     self.last_batch_downloaded = true;
                 }

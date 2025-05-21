@@ -5,7 +5,7 @@ use self::custody::{ActiveCustodyRequest, Error as CustodyRequestError};
 pub use self::requests::{BlocksByRootSingleRequest, DataColumnsByRootSingleBlockRequest};
 use super::block_sidecar_coupling::RangeBlockComponentsRequest;
 use super::manager::BlockProcessType;
-use super::range_sync::ByRangeRequestType;
+use super::range_sync::{BatchPeers, ByRangeRequestType};
 use super::SyncMessage;
 use crate::metrics;
 use crate::network_beacon_processor::NetworkBeaconProcessor;
@@ -443,12 +443,14 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
     /// A blocks by range request sent by the range sync algorithm
     pub fn block_components_by_range_request(
         &mut self,
-        batch_type: ByRangeRequestType,
         request: BlocksByRangeRequest,
         requester: RangeRequestId,
         peers: &HashSet<PeerId>,
         peers_to_deprioritize: &HashSet<PeerId>,
     ) -> Result<Id, RpcRequestSendError> {
+        let batch_epoch = Slot::new(*request.start_slot()).epoch(T::EthSpec::slots_per_epoch());
+        let batch_type = self.batch_type(batch_epoch);
+
         let active_request_count_by_peer = self.active_request_count_by_peer();
 
         let Some(block_peer) = peers
@@ -510,7 +512,12 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
 
         let data_column_requests = columns_by_range_peers_to_request
             .map(|columns_by_range_peers_to_request| {
-                columns_by_range_peers_to_request
+                let column_to_peer_map = columns_by_range_peers_to_request
+                    .iter()
+                    .flat_map(|(peer_id, columns)| columns.iter().map(|column| (*column, *peer_id)))
+                    .collect::<HashMap<ColumnIndex, PeerId>>();
+
+                let requests = columns_by_range_peers_to_request
                     .into_iter()
                     .map(|(peer_id, columns)| {
                         self.send_data_columns_by_range_request(
@@ -523,25 +530,14 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
                             id,
                         )
                     })
-                    .collect::<Result<Vec<_>, _>>()
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Ok((requests, column_to_peer_map))
             })
             .transpose()?;
 
-        let info = RangeBlockComponentsRequest::new(
-            blocks_req_id,
-            blobs_req_id,
-            data_column_requests.map(|data_column_requests| {
-                (
-                    data_column_requests,
-                    self.network_globals()
-                        .sampling_columns
-                        .clone()
-                        .iter()
-                        .copied()
-                        .collect(),
-                )
-            }),
-        );
+        let info =
+            RangeBlockComponentsRequest::new(blocks_req_id, blobs_req_id, data_column_requests);
         self.components_by_range_requests.insert(id, info);
 
         Ok(id.id)
@@ -602,13 +598,16 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         Ok(columns_to_request_by_peer)
     }
 
-    /// Received a blocks by range or blobs by range response for a request that couples blocks '
-    /// and blobs.
+    /// Received a _by_range response for a request that couples blocks and its data
+    ///
+    /// `peer_id` is the peer that served this individual RPC _by_range response.
+    #[allow(clippy::type_complexity)]
     pub fn range_block_component_response(
         &mut self,
         id: ComponentsByRangeRequestId,
+        peer_id: PeerId,
         range_block_component: RangeBlockComponent<T::EthSpec>,
-    ) -> Option<Result<Vec<RpcBlock<T::EthSpec>>, RpcResponseError>> {
+    ) -> Option<Result<(Vec<RpcBlock<T::EthSpec>>, BatchPeers), RpcResponseError>> {
         let Entry::Occupied(mut entry) = self.components_by_range_requests.entry(id) else {
             metrics::inc_counter_vec(&metrics::SYNC_UNKNOWN_NETWORK_REQUESTS, &["range_blocks"]);
             return None;
@@ -619,18 +618,18 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             match range_block_component {
                 RangeBlockComponent::Block(req_id, resp) => resp.and_then(|(blocks, _)| {
                     request
-                        .add_blocks(req_id, blocks)
+                        .add_blocks(req_id, blocks, peer_id)
                         .map_err(RpcResponseError::BlockComponentCouplingError)
                 }),
                 RangeBlockComponent::Blob(req_id, resp) => resp.and_then(|(blobs, _)| {
                     request
-                        .add_blobs(req_id, blobs)
+                        .add_blobs(req_id, blobs, peer_id)
                         .map_err(RpcResponseError::BlockComponentCouplingError)
                 }),
                 RangeBlockComponent::CustodyColumns(req_id, resp) => {
                     resp.and_then(|(custody_columns, _)| {
                         request
-                            .add_custody_columns(req_id, custody_columns)
+                            .add_custody_columns(req_id, custody_columns, peer_id)
                             .map_err(RpcResponseError::BlockComponentCouplingError)
                     })
                 }
@@ -1154,7 +1153,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         );
         let _enter = span.enter();
 
-        debug!(%peer_id, %action, %msg, "Sync reporting peer");
+        debug!(%peer_id, %action, %msg, client = %self.client_type(&peer_id), "Sync reporting peer");
         self.network_send
             .send(NetworkMessage::ReportPeer {
                 peer_id,
@@ -1215,7 +1214,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
 
     /// Check whether a batch for this epoch (and only this epoch) should request just blocks or
     /// blocks and blobs.
-    pub fn batch_type(&self, epoch: types::Epoch) -> ByRangeRequestType {
+    fn batch_type(&self, epoch: types::Epoch) -> ByRangeRequestType {
         // Induces a compile time panic if this doesn't hold true.
         #[allow(clippy::assertions_on_constants)]
         const _: () = assert!(

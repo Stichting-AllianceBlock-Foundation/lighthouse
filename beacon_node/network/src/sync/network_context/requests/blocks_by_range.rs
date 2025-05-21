@@ -1,7 +1,7 @@
 use super::{ActiveRequestItems, LookupVerifyError};
 use lighthouse_network::rpc::BlocksByRangeRequest;
 use std::sync::Arc;
-use types::{EthSpec, SignedBeaconBlock};
+use types::{EthSpec, SignedBeaconBlock, Slot};
 
 /// Accumulates results of a blocks_by_range request. Only returns items after receiving the
 /// stream termination.
@@ -23,10 +23,15 @@ impl<E: EthSpec> ActiveRequestItems for BlocksByRangeRequestItems<E> {
     type Item = Arc<SignedBeaconBlock<E>>;
 
     fn add(&mut self, block: Self::Item) -> Result<bool, LookupVerifyError> {
-        if block.slot().as_u64() < *self.request.start_slot()
-            || block.slot().as_u64() >= self.request.start_slot() + self.request.count()
-        {
-            return Err(LookupVerifyError::UnrequestedSlot(block.slot()));
+        let start_slot = Slot::new(*self.request.start_slot());
+        let end_slot = start_slot + Slot::new(*self.request.count());
+
+        if block.slot() < start_slot || block.slot() >= end_slot {
+            return Err(LookupVerifyError::UnrequestedSlot {
+                slot: block.slot(),
+                start_slot,
+                end_slot,
+            });
         }
         if self
             .items

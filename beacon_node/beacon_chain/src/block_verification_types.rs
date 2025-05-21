@@ -9,8 +9,9 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use types::blob_sidecar::BlobIdentifier;
 use types::{
-    BeaconBlockRef, BeaconState, BlindedPayload, BlobSidecarList, ChainSpec, Epoch, EthSpec,
-    Hash256, RuntimeVariableList, SignedBeaconBlock, SignedBeaconBlockHeader, Slot,
+    BeaconBlockRef, BeaconState, BlindedPayload, BlobSidecarList, ChainSpec, ColumnIndex,
+    DataColumnSidecar, Epoch, EthSpec, Hash256, RuntimeVariableList, SignedBeaconBlock,
+    SignedBeaconBlockHeader, Slot,
 };
 
 /// A block that has been received over RPC. It has 2 internal variants:
@@ -53,7 +54,7 @@ impl<E: EthSpec> RpcBlock<E> {
         match &self.block {
             RpcBlockInner::Block(block) => block,
             RpcBlockInner::BlockAndBlobs(block, _) => block,
-            RpcBlockInner::BlockAndCustodyColumns(block, _) => block,
+            RpcBlockInner::BlockAndCustodyColumns { block, .. } => block,
         }
     }
 
@@ -61,7 +62,7 @@ impl<E: EthSpec> RpcBlock<E> {
         match &self.block {
             RpcBlockInner::Block(block) => block.clone(),
             RpcBlockInner::BlockAndBlobs(block, _) => block.clone(),
-            RpcBlockInner::BlockAndCustodyColumns(block, _) => block.clone(),
+            RpcBlockInner::BlockAndCustodyColumns { block, .. } => block.clone(),
         }
     }
 
@@ -69,7 +70,7 @@ impl<E: EthSpec> RpcBlock<E> {
         match &self.block {
             RpcBlockInner::Block(_) => None,
             RpcBlockInner::BlockAndBlobs(_, blobs) => Some(blobs),
-            RpcBlockInner::BlockAndCustodyColumns(_, _) => None,
+            RpcBlockInner::BlockAndCustodyColumns { .. } => None,
         }
     }
 
@@ -77,7 +78,36 @@ impl<E: EthSpec> RpcBlock<E> {
         match &self.block {
             RpcBlockInner::Block(_) => None,
             RpcBlockInner::BlockAndBlobs(_, _) => None,
-            RpcBlockInner::BlockAndCustodyColumns(_, data_columns) => Some(data_columns),
+            RpcBlockInner::BlockAndCustodyColumns { data_columns, .. } => Some(data_columns),
+        }
+    }
+
+    /// Returns Err if any of its inner BlobSidecar's signed_block_header does not match the inner
+    /// block
+    pub fn match_block_and_blobs(&self) -> Result<(), Vec<u64>> {
+        match &self.block {
+            RpcBlockInner::Block(_) => Ok(()),
+            RpcBlockInner::BlockAndBlobs(block, blobs) => match_block_and_blobs(block, blobs),
+            RpcBlockInner::BlockAndCustodyColumns { .. } => Ok(()),
+        }
+    }
+
+    /// Returns Err if any of its inner DataColumnSidecar's signed_block_header does not match the
+    /// inner block
+    pub fn match_block_and_data_columns(&self) -> Result<(), Vec<ColumnIndex>> {
+        match &self.block {
+            RpcBlockInner::Block(_) => Ok(()),
+            RpcBlockInner::BlockAndBlobs(..) => Ok(()),
+            RpcBlockInner::BlockAndCustodyColumns {
+                block,
+                data_columns,
+                ..
+            } => match_block_and_data_columns(
+                block,
+                data_columns
+                    .iter()
+                    .map(|data_column| data_column.as_data_column()),
+            ),
         }
     }
 }
@@ -88,14 +118,20 @@ impl<E: EthSpec> RpcBlock<E> {
 #[derive(Debug, Clone, Derivative)]
 #[derivative(Hash(bound = "E: EthSpec"))]
 enum RpcBlockInner<E: EthSpec> {
-    /// Single block lookup response. This should potentially hit the data availability cache.
+    /// **Range sync**: Variant for all pre-Deneb blocks
+    /// **Lookup sync**: Variant used for all blocks of all forks, regardless if the have data or
+    /// not
     Block(Arc<SignedBeaconBlock<E>>),
-    /// This variant is used with parent lookups and by-range responses. It should have all blobs
-    /// ordered, all block roots matching, and the correct number of blobs for this block.
+    /// **Range sync**: Variant for all post-Deneb blocks regardless if they have data or not
+    /// **Lookup sync**: Not used
     BlockAndBlobs(Arc<SignedBeaconBlock<E>>, BlobSidecarList<E>),
-    /// This variant is used with parent lookups and by-range responses. It should have all
-    /// requested data columns, all block roots matching for this block.
-    BlockAndCustodyColumns(Arc<SignedBeaconBlock<E>>, CustodyDataColumnList<E>),
+    /// **Range sync**: Variant for all post-Fulu blocks regardless if they have data or not
+    /// **Lookup sync**: Not used
+    BlockAndCustodyColumns {
+        block: Arc<SignedBeaconBlock<E>>,
+        data_columns: CustodyDataColumnList<E>,
+        expected_custody_indices: Vec<ColumnIndex>,
+    },
 }
 
 impl<E: EthSpec> RpcBlock<E> {
@@ -161,23 +197,24 @@ impl<E: EthSpec> RpcBlock<E> {
         block_root: Option<Hash256>,
         block: Arc<SignedBeaconBlock<E>>,
         custody_columns: Vec<CustodyDataColumn<E>>,
-        custody_columns_count: usize,
+        expected_custody_indices: Vec<ColumnIndex>,
         spec: &ChainSpec,
     ) -> Result<Self, AvailabilityCheckError> {
         let block_root = block_root.unwrap_or_else(|| get_block_root(&block));
 
-        if block.num_expected_blobs() > 0 && custody_columns.is_empty() {
-            // The number of required custody columns is out of scope here.
-            return Err(AvailabilityCheckError::MissingCustodyColumns);
-        }
-        // Treat empty data column lists as if they are missing.
-        let inner = if !custody_columns.is_empty() {
-            RpcBlockInner::BlockAndCustodyColumns(
-                block,
-                RuntimeVariableList::new(custody_columns, spec.number_of_columns as usize)?,
+        let custody_columns_count = expected_custody_indices.len();
+        let inner = RpcBlockInner::BlockAndCustodyColumns {
+            block,
+            data_columns: RuntimeVariableList::new(
+                custody_columns,
+                spec.number_of_columns as usize,
             )
-        } else {
-            RpcBlockInner::Block(block)
+            .map_err(|e| {
+                AvailabilityCheckError::Unexpected(format!(
+                    "custody_columns len exceeds number_of_columns: {e:?}"
+                ))
+            })?,
+            expected_custody_indices,
         };
         Ok(Self {
             block_root,
@@ -193,27 +230,34 @@ impl<E: EthSpec> RpcBlock<E> {
         Hash256,
         Arc<SignedBeaconBlock<E>>,
         Option<BlobSidecarList<E>>,
-        Option<CustodyDataColumnList<E>>,
+        Option<(CustodyDataColumnList<E>, Vec<ColumnIndex>)>,
     ) {
         let block_root = self.block_root();
         match self.block {
             RpcBlockInner::Block(block) => (block_root, block, None, None),
             RpcBlockInner::BlockAndBlobs(block, blobs) => (block_root, block, Some(blobs), None),
-            RpcBlockInner::BlockAndCustodyColumns(block, data_columns) => {
-                (block_root, block, None, Some(data_columns))
-            }
+            RpcBlockInner::BlockAndCustodyColumns {
+                block,
+                data_columns,
+                expected_custody_indices,
+            } => (
+                block_root,
+                block,
+                None,
+                Some((data_columns, expected_custody_indices)),
+            ),
         }
     }
     pub fn n_blobs(&self) -> usize {
         match &self.block {
-            RpcBlockInner::Block(_) | RpcBlockInner::BlockAndCustodyColumns(_, _) => 0,
+            RpcBlockInner::Block(_) | RpcBlockInner::BlockAndCustodyColumns { .. } => 0,
             RpcBlockInner::BlockAndBlobs(_, blobs) => blobs.len(),
         }
     }
     pub fn n_data_columns(&self) -> usize {
         match &self.block {
             RpcBlockInner::Block(_) | RpcBlockInner::BlockAndBlobs(_, _) => 0,
-            RpcBlockInner::BlockAndCustodyColumns(_, data_columns) => data_columns.len(),
+            RpcBlockInner::BlockAndCustodyColumns { data_columns, .. } => data_columns.len(),
         }
     }
 }
@@ -528,17 +572,50 @@ impl<E: EthSpec> AsBlock<E> for RpcBlock<E> {
         match &self.block {
             RpcBlockInner::Block(block) => block,
             RpcBlockInner::BlockAndBlobs(block, _) => block,
-            RpcBlockInner::BlockAndCustodyColumns(block, _) => block,
+            RpcBlockInner::BlockAndCustodyColumns { block, .. } => block,
         }
     }
     fn block_cloned(&self) -> Arc<SignedBeaconBlock<E>> {
         match &self.block {
             RpcBlockInner::Block(block) => block.clone(),
             RpcBlockInner::BlockAndBlobs(block, _) => block.clone(),
-            RpcBlockInner::BlockAndCustodyColumns(block, _) => block.clone(),
+            RpcBlockInner::BlockAndCustodyColumns { block, .. } => block.clone(),
         }
     }
     fn canonical_root(&self) -> Hash256 {
         self.as_block().canonical_root()
+    }
+}
+
+/// Returns Err if any of `blobs` BlobSidecar's signed_block_header does not match
+/// block
+pub fn match_block_and_blobs<E: EthSpec>(
+    block: &SignedBeaconBlock<E>,
+    blobs: &BlobSidecarList<E>,
+) -> Result<(), Vec<u64>> {
+    let indices = blobs
+        .iter()
+        .filter(|blob| &blob.signed_block_header.signature != block.signature())
+        .map(|blob| blob.index)
+        .collect::<Vec<_>>();
+    if indices.is_empty() {
+        Ok(())
+    } else {
+        Err(indices)
+    }
+}
+
+pub fn match_block_and_data_columns<'a, E: EthSpec>(
+    block: &SignedBeaconBlock<E>,
+    data_columns: impl Iterator<Item = &'a Arc<DataColumnSidecar<E>>>,
+) -> Result<(), Vec<ColumnIndex>> {
+    let indices = data_columns
+        .filter(|column| &column.signed_block_header.signature != block.signature())
+        .map(|column| column.index)
+        .collect::<Vec<_>>();
+    if indices.is_empty() {
+        Ok(())
+    } else {
+        Err(indices)
     }
 }

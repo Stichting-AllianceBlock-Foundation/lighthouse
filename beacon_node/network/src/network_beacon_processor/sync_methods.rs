@@ -7,7 +7,6 @@ use crate::sync::{
 };
 use beacon_chain::block_verification_types::{AsBlock, RpcBlock};
 use beacon_chain::data_availability_checker::AvailabilityCheckError;
-use beacon_chain::data_availability_checker::MaybeAvailableBlock;
 use beacon_chain::data_column_verification::verify_kzg_for_data_column_list;
 use beacon_chain::{
     validator_monitor::get_slot_delay_ms, AvailabilityProcessingStatus, BeaconChainTypes,
@@ -18,6 +17,7 @@ use beacon_processor::{
     AsyncFn, BlockingFn, DuplicateCache,
 };
 use lighthouse_network::PeerAction;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use store::KzgCommitment;
@@ -25,7 +25,9 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use types::beacon_block_body::format_kzg_commitments;
 use types::blob_sidecar::FixedBlobSidecarList;
-use types::{BlockImportSource, DataColumnSidecar, DataColumnSidecarList, Epoch, Hash256};
+use types::{
+    BlockImportSource, ColumnIndex, DataColumnSidecar, DataColumnSidecarList, Epoch, Hash256,
+};
 
 /// Id associated to a batch processing request, either a sync batch or a parent lookup.
 #[derive(Clone, Debug, PartialEq)]
@@ -37,11 +39,65 @@ pub enum ChainSegmentProcessId {
 }
 
 /// Returned when a chain segment import fails.
-struct ChainSegmentFailed {
+#[derive(Debug)]
+pub struct ChainSegmentFailed {
     /// To be displayed in logs.
-    message: String,
+    pub message: String,
     /// Used to penalize peers.
-    peer_action: Option<PeerAction>,
+    pub peer_action: Option<PeerGroupAction>,
+}
+
+/// Tracks which block(s) component caused the block to be invalid. Used to attribute fault in sync.
+#[derive(Debug)]
+pub struct PeerGroupAction {
+    pub block_peer: Option<PeerAction>,
+    pub column_peer: HashMap<ColumnIndex, PeerAction>,
+}
+
+impl PeerGroupAction {
+    fn block_peer(action: PeerAction) -> Self {
+        Self {
+            block_peer: Some(action),
+            column_peer: <_>::default(),
+        }
+    }
+
+    fn column_peers(columns: &[ColumnIndex], action: PeerAction) -> Self {
+        Self {
+            block_peer: None,
+            column_peer: HashMap::from_iter(columns.iter().map(|index| (*index, action))),
+        }
+    }
+
+    fn from_availability_check_error(e: &AvailabilityCheckError) -> Option<Self> {
+        match e {
+            AvailabilityCheckError::InvalidBlobs(_) => {
+                Some(PeerGroupAction::block_peer(PeerAction::LowToleranceError))
+            }
+            AvailabilityCheckError::InvalidColumn(errors) => Some(PeerGroupAction::column_peers(
+                &errors.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+                PeerAction::LowToleranceError,
+            )),
+            AvailabilityCheckError::KzgCommitmentMismatch { .. } => None, // should never happen after checking inclusion proof
+            AvailabilityCheckError::Unexpected(_) => None,                // internal
+            AvailabilityCheckError::MissingBlobs => {
+                Some(PeerGroupAction::block_peer(PeerAction::HighToleranceError))
+            }
+            // TOOD(das): PeerAction::High may be too soft of a penalty. Also may be deprecated
+            // with https://github.com/sigp/lighthouse/issues/6258
+            AvailabilityCheckError::MissingCustodyColumns(columns) => Some(
+                PeerGroupAction::column_peers(columns, PeerAction::HighToleranceError),
+            ),
+            AvailabilityCheckError::BlobIndexInvalid(_) => {
+                Some(PeerGroupAction::block_peer(PeerAction::LowToleranceError))
+            }
+            AvailabilityCheckError::DataColumnIndexInvalid(_) => None, // unreachable
+            AvailabilityCheckError::StoreError(_) => None,             // unreachable
+            AvailabilityCheckError::BlockReplayError(_) => None,       // internal error
+            AvailabilityCheckError::RebuildingStateCaches(_) => None,  // internal error
+            AvailabilityCheckError::SlotClockError => None,            // internal error
+        }
+    }
 }
 
 impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
@@ -480,7 +536,8 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                         match e.peer_action {
                             Some(penalty) => BatchProcessResult::FaultyFailure {
                                 imported_blocks,
-                                penalty,
+                                peer_action: penalty,
+                                error: e.message,
                             },
                             None => BatchProcessResult::NonFaultyFailure,
                         }
@@ -502,7 +559,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     .sum::<usize>();
 
                 match self.process_backfill_blocks(downloaded_blocks) {
-                    (imported_blocks, Ok(_)) => {
+                    Ok(imported_blocks) => {
                         debug!(
                             batch_epoch = %epoch,
                             first_block_slot = start_slot,
@@ -518,7 +575,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                             imported_blocks,
                         }
                     }
-                    (_, Err(e)) => {
+                    Err(e) => {
                         debug!(
                             batch_epoch = %epoch,
                             first_block_slot = start_slot,
@@ -529,9 +586,10 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                             "Backfill batch processing failed"
                         );
                         match e.peer_action {
-                            Some(penalty) => BatchProcessResult::FaultyFailure {
+                            Some(peer_action) => BatchProcessResult::FaultyFailure {
                                 imported_blocks: 0,
-                                penalty,
+                                peer_action,
+                                error: e.message,
                             },
                             None => BatchProcessResult::NonFaultyFailure,
                         }
@@ -589,148 +647,77 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
     fn process_backfill_blocks(
         &self,
         downloaded_blocks: Vec<RpcBlock<T::EthSpec>>,
-    ) -> (usize, Result<(), ChainSegmentFailed>) {
-        let total_blocks = downloaded_blocks.len();
-        let available_blocks = match self
+    ) -> Result<usize, ChainSegmentFailed> {
+        match self
             .chain
-            .data_availability_checker
-            .verify_kzg_for_rpc_blocks(downloaded_blocks)
+            .verify_and_import_historical_block_batch(downloaded_blocks)
         {
-            Ok(blocks) => blocks
-                .into_iter()
-                .filter_map(|maybe_available| match maybe_available {
-                    MaybeAvailableBlock::Available(block) => Some(block),
-                    MaybeAvailableBlock::AvailabilityPending { .. } => None,
-                })
-                .collect::<Vec<_>>(),
-            Err(e) => match e {
-                AvailabilityCheckError::StoreError(_) => {
-                    return (
-                        0,
-                        Err(ChainSegmentFailed {
-                            peer_action: None,
-                            message: "Failed to check block availability".into(),
-                        }),
-                    );
-                }
-                e => {
-                    return (
-                        0,
-                        Err(ChainSegmentFailed {
-                            peer_action: Some(PeerAction::LowToleranceError),
-                            message: format!("Failed to check block availability : {:?}", e),
-                        }),
-                    )
-                }
-            },
-        };
-
-        if available_blocks.len() != total_blocks {
-            return (
-                0,
-                Err(ChainSegmentFailed {
-                    peer_action: Some(PeerAction::LowToleranceError),
-                    message: format!(
-                        "{} out of {} blocks were unavailable",
-                        (total_blocks - available_blocks.len()),
-                        total_blocks
-                    ),
-                }),
-            );
-        }
-
-        match self.chain.import_historical_block_batch(available_blocks) {
             Ok(imported_blocks) => {
                 metrics::inc_counter(
                     &metrics::BEACON_PROCESSOR_BACKFILL_CHAIN_SEGMENT_SUCCESS_TOTAL,
                 );
-                (imported_blocks, Ok(()))
+                Ok(imported_blocks)
             }
             Err(e) => {
                 metrics::inc_counter(
                     &metrics::BEACON_PROCESSOR_BACKFILL_CHAIN_SEGMENT_FAILED_TOTAL,
                 );
                 let peer_action = match &e {
-                    HistoricalBlockError::MismatchedBlockRoot {
-                        block_root,
-                        expected_block_root,
-                    } => {
-                        debug!(
-                            error = "mismatched_block_root",
-                            ?block_root,
-                            expected_root = ?expected_block_root,
-                            "Backfill batch processing error"
-                        );
-                        // The peer is faulty if they send blocks with bad roots.
-                        Some(PeerAction::LowToleranceError)
+                    HistoricalBlockError::AvailabilityCheckError(e) => {
+                        PeerGroupAction::from_availability_check_error(e)
                     }
-                    HistoricalBlockError::InvalidSignature
-                    | HistoricalBlockError::SignatureSet(_) => {
-                        warn!(
-                            error = ?e,
-                            "Backfill batch processing error"
-                        );
-                        // The peer is faulty if they bad signatures.
-                        Some(PeerAction::LowToleranceError)
+                    // The peer is faulty if they send blocks with bad roots or invalid signatures
+                    HistoricalBlockError::MismatchedBlockRoot { .. }
+                    | HistoricalBlockError::InvalidSignature(_) => {
+                        Some(PeerGroupAction::block_peer(PeerAction::LowToleranceError))
                     }
-                    HistoricalBlockError::ValidatorPubkeyCacheTimeout => {
-                        warn!(
-                            error = "pubkey_cache_timeout",
-                            "Backfill batch processing error"
-                        );
+                    // Blobs are served by the block_peer
+                    HistoricalBlockError::InvalidBlobsSignature(_) => {
+                        Some(PeerGroupAction::block_peer(PeerAction::LowToleranceError))
+                    }
+                    HistoricalBlockError::InvalidDataColumnsSignature(indices) => Some(
+                        PeerGroupAction::column_peers(indices, PeerAction::LowToleranceError),
+                    ),
+                    HistoricalBlockError::ValidatorPubkeyCacheTimeout
+                    | HistoricalBlockError::IndexOutOfBounds
+                    | HistoricalBlockError::StoreError(_)
+                    | HistoricalBlockError::Unexpected(_) => {
                         // This is an internal error, do not penalize the peer.
                         None
-                    }
-                    HistoricalBlockError::IndexOutOfBounds => {
-                        error!(
-                            error = ?e,
-                            "Backfill batch OOB error"
-                        );
-                        // This should never occur, don't penalize the peer.
-                        None
-                    }
-                    HistoricalBlockError::StoreError(e) => {
-                        warn!(error = ?e, "Backfill batch processing error");
-                        // This is an internal error, don't penalize the peer.
-                        None
-                    } //
-                      // Do not use a fallback match, handle all errors explicitly
+                    } // Do not use a fallback match, handle all errors explicitly
                 };
-                let err_str: &'static str = e.into();
-                (
-                    0,
-                    Err(ChainSegmentFailed {
-                        message: format!("{:?}", err_str),
-                        // This is an internal error, don't penalize the peer.
-                        peer_action,
-                    }),
-                )
+
+                if peer_action.is_some() {
+                    // All errors that result in a peer penalty are "expected" external faults the
+                    // node runner can't do anything about
+                    debug!(?e, "Backfill sync processing error");
+                } else {
+                    // All others are some type of internal error worth surfacing?
+                    warn!(?e, "Unexpected backfill sync processing error");
+                }
+
+                Err(ChainSegmentFailed {
+                    // Render the full error in debug for full details
+                    message: format!("{:?}", e),
+                    peer_action,
+                })
             }
         }
     }
 
     /// Helper function to handle a `BlockError` from `process_chain_segment`
     fn handle_failed_chain_segment(&self, error: BlockError) -> Result<(), ChainSegmentFailed> {
-        match error {
-            BlockError::ParentUnknown { parent_root, .. } => {
+        let peer_action = match &error {
+            BlockError::ParentUnknown { .. } => {
                 // blocks should be sequential and all parents should exist
-                Err(ChainSegmentFailed {
-                    message: format!("Block has an unknown parent: {}", parent_root),
-                    // Peers are faulty if they send non-sequential blocks.
-                    peer_action: Some(PeerAction::LowToleranceError),
-                })
-            }
-            BlockError::DuplicateFullyImported(_)
-            | BlockError::DuplicateImportStatusUnknown(..) => {
-                // This can happen for many reasons. Head sync's can download multiples and parent
-                // lookups can download blocks before range sync
-                Ok(())
+                // Peers are faulty if they send non-sequential blocks.
+                Some(PeerGroupAction::block_peer(PeerAction::LowToleranceError))
             }
             BlockError::FutureSlot {
                 present_slot,
                 block_slot,
             } => {
-                if present_slot + FUTURE_SLOT_TOLERANCE >= block_slot {
+                if *present_slot + FUTURE_SLOT_TOLERANCE >= *block_slot {
                     // The block is too far in the future, drop it.
                     warn!(
                         msg = "block for future slot rejected, check your time",
@@ -739,121 +726,90 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                         FUTURE_SLOT_TOLERANCE,
                         "Block is ahead of our slot clock"
                     );
-                } else {
-                    // The block is in the future, but not too far.
-                    debug!(
-                        %present_slot,
-                        %block_slot,
-                        FUTURE_SLOT_TOLERANCE,
-                        "Block is slightly ahead of our slot clock. Ignoring."
-                    );
                 }
-
-                Err(ChainSegmentFailed {
-                    message: format!(
-                        "Block with slot {} is higher than the current slot {}",
-                        block_slot, present_slot
-                    ),
-                    // Peers are faulty if they send blocks from the future.
-                    peer_action: Some(PeerAction::LowToleranceError),
-                })
+                // Peers are faulty if they send blocks from the future.
+                Some(PeerGroupAction::block_peer(PeerAction::LowToleranceError))
             }
-            BlockError::WouldRevertFinalizedSlot { .. } => {
-                debug!("Finalized or earlier block processed");
-                Ok(())
+            // Block is invalid
+            BlockError::StateRootMismatch { .. }
+            | BlockError::BlockSlotLimitReached
+            | BlockError::IncorrectBlockProposer { .. }
+            | BlockError::UnknownValidator { .. }
+            | BlockError::BlockIsNotLaterThanParent { .. }
+            | BlockError::NonLinearParentRoots
+            | BlockError::NonLinearSlots
+            | BlockError::PerBlockProcessingError(_)
+            | BlockError::InconsistentFork(_)
+            | BlockError::InvalidSignature(_) => {
+                Some(PeerGroupAction::block_peer(PeerAction::LowToleranceError))
             }
-            BlockError::NotFinalizedDescendant { block_parent_root } => {
-                debug!(
-                    "Not syncing to a chain that conflicts with the canonical or manual finalized checkpoint"
-                );
-                Err(ChainSegmentFailed {
-                    message: format!(
-                        "Block with parent_root {} conflicts with our checkpoint state",
-                        block_parent_root
-                    ),
-                    peer_action: Some(PeerAction::Fatal),
-                })
+            // Currently blobs are served by the block peer
+            BlockError::InvalidBlobsSignature(_) => {
+                Some(PeerGroupAction::block_peer(PeerAction::LowToleranceError))
             }
-            BlockError::GenesisBlock => {
-                debug!("Genesis block was processed");
-                Ok(())
+            BlockError::InvalidDataColumnsSignature(indices) => Some(
+                PeerGroupAction::column_peers(indices, PeerAction::LowToleranceError),
+            ),
+            BlockError::GenesisBlock
+            | BlockError::WouldRevertFinalizedSlot { .. }
+            | BlockError::DuplicateFullyImported(_)
+            | BlockError::DuplicateImportStatusUnknown(..) => {
+                // This can happen for many reasons. Head sync's can download multiples and parent
+                // lookups can download blocks before range sync
+                return Ok(());
             }
-            BlockError::BeaconChainError(e) => {
-                warn!(
-                    msg = "unexpected condition in processing block.",
-                    outcome = ?e,
-                    "BlockProcessingFailure"
-                );
-
-                Err(ChainSegmentFailed {
-                    message: format!("Internal error whilst processing block: {:?}", e),
-                    // Do not penalize peers for internal errors.
-                    peer_action: None,
-                })
+            // Not syncing to a chain that conflicts with the canonical or manual finalized checkpoint
+            BlockError::NotFinalizedDescendant { .. } | BlockError::WeakSubjectivityConflict => {
+                Some(PeerGroupAction::block_peer(PeerAction::Fatal))
             }
-            ref err @ BlockError::ExecutionPayloadError(ref epe) => {
-                if !epe.penalize_peer() {
+            BlockError::AvailabilityCheck(e) => PeerGroupAction::from_availability_check_error(e),
+            BlockError::ExecutionPayloadError(e) => {
+                if !e.penalize_peer() {
                     // These errors indicate an issue with the EL and not the `ChainSegment`.
                     // Pause the syncing while the EL recovers
-                    debug!(
-                        outcome = "pausing sync",
-                        ?err,
-                        "Execution layer verification failed"
-                    );
-                    Err(ChainSegmentFailed {
-                        message: format!("Execution layer offline. Reason: {:?}", err),
-                        // Do not penalize peers for internal errors.
-                        peer_action: None,
-                    })
+                    None
                 } else {
-                    debug!(
-                        error = ?err,
-                        "Invalid execution payload"
-                    );
-                    Err(ChainSegmentFailed {
-                        message: format!(
-                            "Peer sent a block containing invalid execution payload. Reason: {:?}",
-                            err
-                        ),
-                        peer_action: Some(PeerAction::LowToleranceError),
-                    })
+                    Some(PeerGroupAction::block_peer(PeerAction::LowToleranceError))
                 }
             }
-            ref err @ BlockError::ParentExecutionPayloadInvalid { ref parent_root } => {
+            // We need to penalise harshly in case this represents an actual attack. In case
+            // of a faulty EL it will usually require manual intervention to fix anyway, so
+            // it's not too bad if we drop most of our peers.
+            BlockError::ParentExecutionPayloadInvalid { parent_root } => {
                 warn!(
                     ?parent_root,
                     advice = "check execution node for corruption then restart it and Lighthouse",
                     "Failed to sync chain built on invalid parent"
                 );
-                Err(ChainSegmentFailed {
-                    message: format!("Peer sent invalid block. Reason: {err:?}"),
-                    // We need to penalise harshly in case this represents an actual attack. In case
-                    // of a faulty EL it will usually require manual intervention to fix anyway, so
-                    // it's not too bad if we drop most of our peers.
-                    peer_action: Some(PeerAction::LowToleranceError),
-                })
+                Some(PeerGroupAction::block_peer(PeerAction::LowToleranceError))
             }
             // Penalise peers for sending us banned blocks.
             BlockError::KnownInvalidExecutionPayload(block_root) => {
-                warn!(?block_root, "Received block known to be invalid",);
-                Err(ChainSegmentFailed {
-                    message: format!("Banned block: {block_root:?}"),
-                    peer_action: Some(PeerAction::Fatal),
-                })
+                warn!(?block_root, "Received block known to be invalid");
+                Some(PeerGroupAction::block_peer(PeerAction::Fatal))
             }
-            other => {
-                debug!(
-                    msg = "peer sent invalid block",
-                    outcome = %other,
-                    "Invalid block received"
-                );
+            BlockError::Slashable => {
+                Some(PeerGroupAction::block_peer(PeerAction::MidToleranceError))
+            }
+            // Do not penalize peers for internal errors.
+            // BlobNotRequired is never constructed on this path
+            // TODO(sync): Double check that all `BeaconChainError` variants are actually internal
+            // errors in thie code path
+            BlockError::BeaconChainError(_)
+            | BlockError::InternalError(_)
+            | BlockError::BlobNotRequired(_) => None,
+            // Do not use a fallback match, handle all errors explicitly
+        };
 
-                Err(ChainSegmentFailed {
-                    message: format!("Peer sent invalid block. Reason: {:?}", other),
-                    // Do not penalize peers for internal errors.
-                    peer_action: None,
-                })
-            }
+        if peer_action.is_some() {
+            debug!(?error, "Range sync processing error");
+        } else {
+            warn!(?error, "Unexpected range sync processing error");
         }
+
+        Err(ChainSegmentFailed {
+            message: format!("{error:?}"),
+            peer_action,
+        })
     }
 }
