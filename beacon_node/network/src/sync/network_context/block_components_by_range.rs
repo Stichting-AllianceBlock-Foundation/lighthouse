@@ -19,6 +19,10 @@ use types::{
     SignedBeaconBlock, Slot,
 };
 
+/// Given a `BlocksByRangeRequest` (a range of slots) fetches all necessary data to return
+/// potentially available RpcBlocks.
+///
+/// See [`State`] for the set of `*_by_range` it may issue depending on the fork.
 pub struct BlockComponentsByRangeRequest<T: BeaconChainTypes> {
     id: ComponentsByRangeRequestId,
     peers: Arc<RwLock<HashSet<PeerId>>>,
@@ -31,13 +35,16 @@ enum State<E: EthSpec> {
         blocks_by_range_request:
             ByRangeRequest<BlocksByRangeRequestId, Vec<Arc<SignedBeaconBlock<E>>>>,
     },
-    // Two single concurrent requests for block + blobs
+    // Two single concurrent requests for block + blobs. As of now we request blocks and blobs to
+    // the same peer, so we can attribute coupling errors to the same unique peer.
     DenebEnabled {
         blocks_by_range_request:
             ByRangeRequest<BlocksByRangeRequestId, Vec<Arc<SignedBeaconBlock<E>>>>,
         blobs_by_range_request: ByRangeRequest<BlobsByRangeRequestId, Vec<Arc<BlobSidecar<E>>>>,
     },
-    // Request blocks first, then columns
+    // Request blocks first, then columns. Assuming the block peer is honest we can attribute
+    // custody failures to the peers serving us columns. We want to get rid of the honest block
+    // peer assumption in the future, see https://github.com/sigp/lighthouse/issues/6258
     FuluEnabled(FuluEnabledState<E>),
 }
 

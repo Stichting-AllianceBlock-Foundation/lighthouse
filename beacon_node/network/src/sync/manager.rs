@@ -1301,11 +1301,11 @@ impl<T: BeaconChainTypes> SyncManager<T> {
         range_request_id: ComponentsByRangeRequestId,
         range_block_component: RangeBlockComponent<T::EthSpec>,
     ) {
-        if let Some(resp) = self
+        if let Some(result) = self
             .network
             .on_block_components_by_range_response(range_request_id, range_block_component)
         {
-            match resp {
+            match result {
                 Ok((blocks, batch_peers)) => {
                     match range_request_id.requester {
                         RangeRequestId::RangeSync { chain_id, batch_id } => {
