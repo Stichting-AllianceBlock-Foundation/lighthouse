@@ -1349,22 +1349,20 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         );
         let _enter = span.enter();
 
-        let result = result.map_err(Into::<RpcResponseError>::into).transpose();
-
-        // Convert a result from internal format of `ActiveCustodyRequest` (error first to use ?) to
-        // an Option first to use in an `if let Some() { act on result }` block.
-        match result.as_ref() {
-            Some(Ok((columns, peer_group, _))) => {
+        match &result {
+            Ok(Some((columns, peer_group, _))) => {
                 debug!(%id, count = columns.len(), peers = ?peer_group, "Custody by root request success, removing")
             }
-            Some(Err(e)) => {
-                debug!(%id, error = ?e, "Custody by root request failure, removing" )
+            Err(e) => {
+                debug!(%id, error = ?e, "Custody by root request failure, removing")
             }
-            None => {
+            Ok(None) => {
                 self.custody_by_root_requests.insert(id, request);
             }
         }
-        result
+        // Convert a result from internal format of `ActiveCustodyRequest` (error first to use ?) to
+        // an Option first to use in an `if let Some() { act on result }` block.
+        result.map_err(Into::<RpcResponseError>::into).transpose()
     }
 
     /// Insert a downloaded column into an active custody request. Then make progress on the
@@ -1385,8 +1383,10 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         // Note: need to remove the request to borrow self again below. Otherwise we can't
         // do nested requests
         let Some(mut request) = self.custody_by_range_requests.remove(&id) else {
-            // TOOD(das): This log can happen if the request is error'ed early and dropped
-            debug!(%id, "Custody by range downloaded event for unknown request");
+            metrics::inc_counter_vec(
+                &metrics::SYNC_UNKNOWN_NETWORK_REQUESTS,
+                &["custody_by_range"],
+            );
             return None;
         };
 
@@ -1401,25 +1401,23 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         request: ActiveCustodyByRangeRequest<T>,
         result: CustodyByRangeRequestResult<T::EthSpec>,
     ) -> Option<CustodyByRangeResult<T::EthSpec>> {
-        let result = result.map_err(Into::<RpcResponseError>::into).transpose();
-
-        // Convert a result from internal format of `ActiveCustodyRequest` (error first to use ?) to
-        // an Option first to use in an `if let Some() { act on result }` block.
-        match result.as_ref() {
-            Some(Ok((columns, _peer_group, _))) => {
+        match &result {
+            Ok(Some((columns, _peer_group, _))) => {
                 // Don't log the peer_group here, it's very long (could be up to 128 peers). If you
                 // want to trace which peer sent the column at index X, search for the log:
                 // `Sync RPC request sent method="DataColumnsByRange" ...`
                 debug!(%id, count = columns.len(), "Custody by range request success, removing")
             }
-            Some(Err(e)) => {
-                debug!(%id, error = ?e, "Custody by range request failure, removing" )
+            Err(e) => {
+                debug!(%id, error = ?e, "Custody by range request failure, removing")
             }
-            None => {
+            Ok(None) => {
                 self.custody_by_range_requests.insert(id, request);
             }
         }
-        result
+        // Convert a result from internal format of `ActiveCustodyRequest` (error first to use ?) to
+        // an Option first to use in an `if let Some() { act on result }` block.
+        result.map_err(Into::<RpcResponseError>::into).transpose()
     }
 
     /// Processes the result of an `*_by_range` RPC request issued by a
