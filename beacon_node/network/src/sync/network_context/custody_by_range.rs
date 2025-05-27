@@ -3,7 +3,7 @@ use crate::sync::network_context::RpcResponseError;
 use beacon_chain::validator_monitor::timestamp_now;
 use beacon_chain::BeaconChainTypes;
 use fnv::FnvHashMap;
-use lighthouse_network::rpc::methods::DataColumnsByRangeRequest;
+use lighthouse_network::rpc::{methods::DataColumnsByRangeRequest, BlocksByRangeRequest};
 use lighthouse_network::service::api_types::{
     CustodyByRangeRequestId, DataColumnsByRangeRequestId,
 };
@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use tracing::{debug, warn};
 use types::{
-    data_column_sidecar::ColumnIndex, DataColumnSidecar, DataColumnSidecarList, Epoch, EthSpec,
-    Hash256, SignedBeaconBlockHeader, Slot,
+    data_column_sidecar::ColumnIndex, DataColumnSidecar, DataColumnSidecarList, Hash256,
+    SignedBeaconBlockHeader, Slot,
 };
 
 use super::{PeerGroup, RpcResponseResult, SyncNetworkContext};
@@ -28,8 +28,7 @@ const REQUEST_EXPIRY_SECONDS: u64 = 300;
 pub struct ActiveCustodyByRangeRequest<T: BeaconChainTypes> {
     start_time: Instant,
     id: CustodyByRangeRequestId,
-    // TODO(das): Pass a better type for the by_range request
-    epoch: Epoch,
+    request: BlocksByRangeRequest,
     /// Blocks that we expect peers to serve data columns for
     blocks_with_data: Vec<SignedBeaconBlockHeader>,
     /// List of column indices this request needs to download to complete successfully
@@ -74,7 +73,7 @@ enum ColumnResponseError {
 impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
     pub(crate) fn new(
         id: CustodyByRangeRequestId,
-        epoch: Epoch,
+        request: BlocksByRangeRequest,
         blocks_with_data: Vec<SignedBeaconBlockHeader>,
         column_indices: &[ColumnIndex],
         lookup_peers: Arc<RwLock<HashSet<PeerId>>>,
@@ -82,7 +81,7 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
         Self {
             start_time: Instant::now(),
             id,
-            epoch,
+            request,
             blocks_with_data,
             column_requests: HashMap::from_iter(
                 column_indices
@@ -350,7 +349,6 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                 })
                 .collect::<Result<Vec<_>, _>>()?
                 // Flatten Vec<Vec<Columns>> to Vec<Columns>
-                // TODO(das): maybe not optimal for the coupling logic later
                 .into_iter()
                 .flatten()
                 .collect();
@@ -375,8 +373,9 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                     return Err(Error::TooManyDownloadErrors(last_error));
                 }
 
-                // TODO(das): When is a fork and only a subset of your peers know about a block, we should
-                // only query the peers on that fork. Should this case be handled? How to handle it?
+                // TODO(das): We should only query peers that are likely to know about this block.
+                // For by_range requests, only peers in the SyncingChain peer set. Else consider a
+                // fallback to the peers that are synced up to the epoch we want to query.
                 let custodial_peers = cx.get_custodial_peers(*column_index);
 
                 // We draw from the total set of peers, but prioritize those peers who we have
@@ -433,12 +432,8 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                 .send_data_columns_by_range_request(
                     peer_id,
                     DataColumnsByRangeRequest {
-                        // TODO(das): generalize with constants from batch
-                        start_slot: self
-                            .epoch
-                            .start_slot(T::EthSpec::slots_per_epoch())
-                            .as_u64(),
-                        count: T::EthSpec::slots_per_epoch(),
+                        start_slot: *self.request.start_slot(),
+                        count: *self.request.count(),
                         columns: indices.clone(),
                     },
                     self.id,

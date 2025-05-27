@@ -48,7 +48,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, span, warn, Level};
 use types::blob_sidecar::FixedBlobSidecarList;
 use types::{
-    BlobSidecar, ChainSpec, ColumnIndex, DataColumnSidecar, DataColumnSidecarList, Epoch, EthSpec,
+    BlobSidecar, ChainSpec, ColumnIndex, DataColumnSidecar, DataColumnSidecarList, EthSpec,
     ForkContext, Hash256, SignedBeaconBlock, SignedBeaconBlockHeader, Slot,
 };
 
@@ -124,42 +124,41 @@ pub struct PeerGroup {
     /// Peers group by which indexed section of the block component they served. For example:
     /// - PeerA served = [blob index 0, blob index 2]
     /// - PeerA served = [blob index 1]
-    peers: HashMap<PeerId, Vec<usize>>,
+    peers: HashMap<usize, PeerId>,
 }
 
 impl PeerGroup {
+    pub fn empty() -> Self {
+        Self {
+            peers: HashMap::new(),
+        }
+    }
+
     /// Return a peer group where a single peer returned all parts of a block component. For
     /// example, a block has a single component (the block = index 0/1).
     pub fn from_single(peer: PeerId) -> Self {
         Self {
-            peers: HashMap::from_iter([(peer, vec![0])]),
+            peers: HashMap::from_iter([(0, peer)]),
         }
     }
-    pub fn from_set(peers: HashMap<PeerId, Vec<usize>>) -> Self {
+    pub fn from_set(peer_to_indices: HashMap<PeerId, Vec<usize>>) -> Self {
+        let mut peers = HashMap::new();
+        for (peer, indices) in peer_to_indices {
+            for index in indices {
+                peers.insert(index, peer);
+            }
+        }
         Self { peers }
     }
     pub fn all(&self) -> impl Iterator<Item = &PeerId> + '_ {
-        self.peers.keys()
+        self.peers.values()
     }
-    pub fn of_index(&self, index: usize) -> impl Iterator<Item = &PeerId> + '_ {
-        self.peers.iter().filter_map(move |(peer, indices)| {
-            if indices.contains(&index) {
-                Some(peer)
-            } else {
-                None
-            }
-        })
+    pub fn of_index(&self, index: &usize) -> Option<&PeerId> {
+        self.peers.get(index)
     }
 
-    pub fn as_reversed_map(&self) -> HashMap<u64, PeerId> {
-        // TODO(das): should we change PeerGroup to hold this map?
-        let mut index_to_peer = HashMap::<u64, PeerId>::new();
-        for (peer, indices) in self.peers.iter() {
-            for &index in indices {
-                index_to_peer.insert(index as u64, *peer);
-            }
-        }
-        index_to_peer
+    pub fn as_map(&self) -> &HashMap<usize, PeerId> {
+        &self.peers
     }
 }
 
@@ -953,7 +952,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         &mut self,
         parent_id: ComponentsByRangeRequestId,
         blocks_with_data: Vec<SignedBeaconBlockHeader>,
-        epoch: Epoch,
+        request: BlocksByRangeRequest,
         column_indices: Vec<ColumnIndex>,
         lookup_peers: Arc<RwLock<HashSet<PeerId>>>,
     ) -> Result<CustodyByRangeRequestId, RpcRequestSendError> {
@@ -970,7 +969,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
 
         let mut request = ActiveCustodyByRangeRequest::new(
             id,
-            epoch,
+            request,
             blocks_with_data,
             &column_indices,
             lookup_peers,

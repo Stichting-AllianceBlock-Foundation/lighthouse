@@ -21,7 +21,8 @@ use super::{LookupRequestResult, PeerGroup, RpcResponseResult, SyncNetworkContex
 
 const FAILED_PEERS_CACHE_EXPIRY_SECONDS: u64 = 5;
 const REQUEST_EXPIRY_SECONDS: u64 = 300;
-/// TODO(das): this attempt count is nested into the existing lookup request count.
+/// TODO(das): Reconsider this retry count, it was choosen as a placeholder value. Each
+/// `custody_by_*` request is already retried multiple inside of a lookup or batch
 const MAX_CUSTODY_COLUMN_DOWNLOAD_ATTEMPTS: usize = 3;
 
 pub struct ActiveCustodyByRootRequest<T: BeaconChainTypes> {

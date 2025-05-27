@@ -188,8 +188,6 @@ struct CompleteConfig {
 }
 
 impl CompleteConfig {
-    // TODO(das): add tests where blocks don't have data
-
     fn custody_failure_at_index(mut self, index: u64) -> Self {
         self.custody_failure_at_index = Some(index);
         self
@@ -1192,15 +1190,14 @@ fn finalized_sync_permanent_custody_peer_failure() {
 
         // Find the requests first to assert that this is the only request that exists
         r.expect_no_data_columns_by_range_requests(filter().epoch(0));
-        // complete this one request without the custody failure now
         r.complete_data_by_range_request(
             reqs,
             complete().custody_failure_at_index(column_index_to_fail),
         );
     }
 
-    // TODO(das): send batch 1 for completing processing and check that SyncingChain processed batch
-    // 1 successfully
+    // custody_by_range request is still active waiting for a new peer to connect
+    r.expect_active_block_components_by_range_request_on_custody_step();
 }
 
 #[test]

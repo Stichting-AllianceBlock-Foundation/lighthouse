@@ -948,9 +948,6 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                     return Ok(());
                 }
                 Err(e) => match e {
-                    // TODO(das): block_components_by_range requests can now hang out indefinitely.
-                    // Is that fine? Maybe we should fail the requests from the network_context
-                    // level without involving the BackfillSync itself.
                     RpcRequestSendError::InternalError(e) => {
                         // NOTE: under normal conditions this shouldn't happen but we handle it anyway
                         warn!(%batch_id, error = ?e, %batch,"Could not send batch request");

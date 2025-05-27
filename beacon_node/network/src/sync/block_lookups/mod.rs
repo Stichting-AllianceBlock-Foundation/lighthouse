@@ -724,7 +724,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
                                 // Collect all peers that sent a column that was invalid. Must
                                 // run .unique as a single peer can send multiple invalid
                                 // columns. Penalize once to avoid insta-bans
-                                .flat_map(|(index, _)| peer_group.of_index((*index) as usize))
+                                .flat_map(|(index, _)| peer_group.of_index(&(*index as usize)))
                                 .unique()
                                 .collect(),
                             _ => peer_group.all().collect(),

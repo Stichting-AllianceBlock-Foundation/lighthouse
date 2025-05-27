@@ -144,7 +144,6 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
         else {
             // When a peer disconnects and is removed from the SyncingChain peer set, if the set
             // reaches zero the SyncingChain is removed.
-            // TODO(das): add test for this.
             return Err(RpcRequestSendError::InternalError(
                 "A batch peer set should never be empty".to_string(),
             ));
@@ -270,8 +269,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
                                 .send_custody_by_range_request(
                                     self.id,
                                     blocks_with_data,
-                                    Slot::new(*self.request.start_slot())
-                                        .epoch(T::EthSpec::slots_per_epoch()),
+                                    self.request.clone(),
                                     column_indices,
                                     self.peers.clone(),
                                 )
@@ -309,8 +307,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
                             .copied()
                             .collect();
 
-                        let peer_group =
-                            BatchPeers::new(*block_peer, column_peers.as_reversed_map());
+                        let peer_group = BatchPeers::new(*block_peer, column_peers.clone());
                         let rpc_blocks = couple_blocks_fulu(
                             blocks.to_vec(),
                             columns.to_vec(),

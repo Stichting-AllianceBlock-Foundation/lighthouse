@@ -1,9 +1,10 @@
+use crate::sync::network_context::PeerGroup;
 use beacon_chain::block_verification_types::RpcBlock;
 use itertools::Itertools;
 use lighthouse_network::rpc::methods::BlocksByRangeRequest;
 use lighthouse_network::service::api_types::Id;
 use lighthouse_network::PeerId;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Sub;
@@ -22,17 +23,17 @@ const MAX_BATCH_PROCESSING_ATTEMPTS: u8 = 3;
 #[derive(Clone, Debug)]
 pub struct BatchPeers {
     block_peer: PeerId,
-    column_peers: HashMap<ColumnIndex, PeerId>,
+    column_peers: PeerGroup,
 }
 
 impl BatchPeers {
     pub fn new_from_block_peer(block_peer: PeerId) -> Self {
         Self {
             block_peer,
-            column_peers: <_>::default(),
+            column_peers: PeerGroup::empty(),
         }
     }
-    pub fn new(block_peer: PeerId, column_peers: HashMap<ColumnIndex, PeerId>) -> Self {
+    pub fn new(block_peer: PeerId, column_peers: PeerGroup) -> Self {
         Self {
             block_peer,
             column_peers,
@@ -44,12 +45,12 @@ impl BatchPeers {
     }
 
     pub fn column(&self, index: &ColumnIndex) -> Option<&PeerId> {
-        self.column_peers.get(index)
+        self.column_peers.of_index(&((*index) as usize))
     }
 
     pub fn iter_unique_peers(&self) -> impl Iterator<Item = &PeerId> {
         std::iter::once(&self.block_peer)
-            .chain(self.column_peers.values())
+            .chain(self.column_peers.all())
             .unique()
     }
 }
