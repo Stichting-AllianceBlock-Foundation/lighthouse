@@ -368,16 +368,19 @@ impl TestRig {
         self.expect_empty_network();
     }
 
-    // Don't make pub, use `add_connected_peer_testing_only`
+    // Note: prefer to use `add_connected_peer_testing_only`. This is currently extensively used in
+    // lookup tests. We should consolidate this "add peer" methods in a future refactor
     fn new_connected_peer(&mut self) -> PeerId {
         self.add_connected_peer_testing_only(false)
     }
 
-    // Don't make pub, use `add_connected_peer_testing_only`
+    // Note: prefer to use `add_connected_peer_testing_only`. This is currently extensively used in
+    // lookup tests. We should consolidate this "add peer" methods in a future refactor
     fn new_connected_supernode_peer(&mut self) -> PeerId {
         self.add_connected_peer_testing_only(true)
     }
 
+    /// Add a random connected peer that is not known by the sync module
     pub fn add_connected_peer_testing_only(&mut self, supernode: bool) -> PeerId {
         let key = self.determinstic_key();
         let peer_id = self
@@ -401,6 +404,7 @@ impl TestRig {
         peer_id
     }
 
+    /// Add a random connected peer + add it to sync with a specific remote Status
     pub fn add_sync_peer(&mut self, supernode: bool, remote_info: SyncInfo) -> PeerId {
         let peer_id = self.add_connected_peer_testing_only(supernode);
         self.send_sync_message(SyncMessage::AddPeer(peer_id, remote_info));
@@ -887,7 +891,7 @@ impl TestRig {
         }
     }
 
-    // Find, not pop
+    /// Similar to `pop_received_network_events` but finds matching events without removing them.
     pub fn filter_received_network_events<T, F: Fn(&NetworkMessage<E>) -> Option<T>>(
         &mut self,
         predicate_transform: F,
@@ -1149,15 +1153,10 @@ impl TestRig {
     }
 
     pub fn expect_no_penalty_for_anyone(&mut self) {
-        self.drain_network_rx();
-        let downscore_events = self
-            .network_rx_queue
-            .iter()
-            .filter_map(|ev| match ev {
-                NetworkMessage::ReportPeer { peer_id, msg, .. } => Some((peer_id, msg)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let downscore_events = self.filter_received_network_events(|ev| match ev {
+            NetworkMessage::ReportPeer { peer_id, msg, .. } => Some((peer_id, msg)),
+            _ => None,
+        });
         if !downscore_events.is_empty() {
             panic!("Expected no downscoring events but found: {downscore_events:?}");
         }

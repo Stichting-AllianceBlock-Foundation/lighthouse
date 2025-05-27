@@ -51,6 +51,7 @@ enum ByRangeDataRequestIds {
 }
 
 impl ByRangeDataRequestIds {
+    /// If there's a single active request, returns its peer, else panics
     fn peer(&self) -> PeerId {
         match self {
             Self::PreDeneb => panic!("no requests PreDeneb"),

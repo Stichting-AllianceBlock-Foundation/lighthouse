@@ -1225,10 +1225,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
             // custody_by_range accumulates the results of multiple data_columns_by_range requests
             // returning a bigger list of data columns across all the column indices this node has
             // to custody
-            if let Some(result) =
-                self.network
-                    .on_custody_by_range_response(id.parent_request_id, id, peer_id, resp)
-            {
+            if let Some(result) = self.network.on_custody_by_range_response(id, peer_id, resp) {
                 self.on_custody_by_range_result(id.parent_request_id, result);
             }
         }

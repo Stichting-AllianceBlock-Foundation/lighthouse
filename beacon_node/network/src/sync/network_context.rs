@@ -1376,14 +1376,13 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
     #[allow(clippy::type_complexity)]
     pub fn on_custody_by_range_response(
         &mut self,
-        id: CustodyByRangeRequestId,
         req_id: DataColumnsByRangeRequestId,
         peer_id: PeerId,
         resp: RpcResponseResult<DataColumnSidecarList<T::EthSpec>>,
     ) -> Option<CustodyRequestResult<T::EthSpec>> {
         // Note: need to remove the request to borrow self again below. Otherwise we can't
         // do nested requests
-        let Some(mut request) = self.custody_by_range_requests.remove(&id) else {
+        let Some(mut request) = self.custody_by_range_requests.remove(&id.parent_request_id) else {
             metrics::inc_counter_vec(
                 &metrics::SYNC_UNKNOWN_NETWORK_REQUESTS,
                 &["custody_by_range"],
@@ -1396,7 +1395,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             .map_err(Into::<RpcResponseError>::into)
             .transpose();
 
-        self.handle_custody_by_range_result(id, request, result)
+        self.handle_custody_by_range_result(id.parent_request_id, request, result)
     }
 
     fn handle_custody_by_range_result(
