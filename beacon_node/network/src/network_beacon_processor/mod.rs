@@ -554,7 +554,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
     pub fn send_rpc_validate_data_columns(
         self: &Arc<Self>,
         block_root: Hash256,
-        data_columns: Vec<Arc<DataColumnSidecar<T::EthSpec>>>,
+        data_columns: DataColumnSidecarList<T::EthSpec>,
         seen_timestamp: Duration,
         id: SamplingId,
     ) -> Result<(), Error<T::EthSpec>> {

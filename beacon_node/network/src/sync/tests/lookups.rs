@@ -43,8 +43,8 @@ use tracing::info;
 use types::{
     data_column_sidecar::ColumnIndex,
     test_utils::{SeedableRng, TestRandom, XorShiftRng},
-    BeaconState, BeaconStateBase, BlobSidecar, DataColumnSidecar, EthSpec, ForkContext, ForkName,
-    Hash256, MinimalEthSpec as E, SignedBeaconBlock, Slot,
+    BeaconState, BeaconStateBase, BlobSidecar, DataColumnSidecar, DataColumnSidecarList, EthSpec,
+    ForkContext, ForkName, Hash256, MinimalEthSpec as E, SignedBeaconBlock, Slot,
 };
 
 const D: Duration = Duration::new(0, 0);
@@ -216,9 +216,7 @@ impl TestRig {
         generate_rand_block_and_blobs::<E>(fork_name, num_blobs, rng, &self.spec)
     }
 
-    fn rand_block_and_data_columns(
-        &mut self,
-    ) -> (SignedBeaconBlock<E>, Vec<Arc<DataColumnSidecar<E>>>) {
+    fn rand_block_and_data_columns(&mut self) -> (SignedBeaconBlock<E>, DataColumnSidecarList<E>) {
         let num_blobs = NumBlobs::Number(1);
         generate_rand_block_and_data_columns::<E>(
             self.fork_name,
@@ -721,7 +719,7 @@ impl TestRig {
     fn complete_valid_sampling_column_requests(
         &mut self,
         ids: DCByRootIds,
-        data_columns: Vec<Arc<DataColumnSidecar<E>>>,
+        data_columns: DataColumnSidecarList<E>,
     ) {
         for id in ids {
             self.log(&format!("return valid data column for {id:?}"));
@@ -766,7 +764,7 @@ impl TestRig {
     fn complete_valid_custody_request(
         &mut self,
         ids: DCByRootIds,
-        data_columns: Vec<Arc<DataColumnSidecar<E>>>,
+        data_columns: DataColumnSidecarList<E>,
         missing_components: bool,
     ) {
         let lookup_id = if let SyncRequestId::DataColumnsByRoot(DataColumnsByRootRequestId {

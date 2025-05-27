@@ -15,8 +15,8 @@ use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use types::{
-    BlobSidecar, ChainSpec, ColumnIndex, DataColumnSidecar, EthSpec, Hash256, RuntimeVariableList,
-    SignedBeaconBlock, Slot,
+    BlobSidecar, ChainSpec, ColumnIndex, DataColumnSidecarList, EthSpec, Hash256,
+    RuntimeVariableList, SignedBeaconBlock, Slot,
 };
 
 /// Given a `BlocksByRangeRequest` (a range of slots) fetches all necessary data to return
@@ -57,7 +57,7 @@ enum FuluEnabledState<E: EthSpec> {
         blocks: Vec<Arc<SignedBeaconBlock<E>>>,
         block_peer: PeerId,
         custody_by_range_request:
-            ByRangeRequest<CustodyByRangeRequestId, Vec<Arc<DataColumnSidecar<E>>>, PeerGroup>,
+            ByRangeRequest<CustodyByRangeRequestId, DataColumnSidecarList<E>, PeerGroup>,
     },
 }
 
@@ -389,7 +389,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
     pub fn on_custody_by_range_result(
         &mut self,
         id: CustodyByRangeRequestId,
-        data: Vec<Arc<DataColumnSidecar<T::EthSpec>>>,
+        data: DataColumnSidecarList<T::EthSpec>,
         peers: PeerGroup,
         cx: &mut SyncNetworkContext<T>,
     ) -> BlockComponentsByRangeRequestResult<T::EthSpec> {
@@ -483,7 +483,7 @@ fn couple_blocks_deneb<E: EthSpec>(
 
 fn couple_blocks_fulu<E: EthSpec>(
     blocks: Vec<Arc<SignedBeaconBlock<E>>>,
-    data_columns: Vec<Arc<DataColumnSidecar<E>>>,
+    data_columns: DataColumnSidecarList<E>,
     custody_column_indices: Vec<ColumnIndex>,
     spec: &ChainSpec,
 ) -> Result<Vec<RpcBlock<E>>, Error> {

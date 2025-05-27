@@ -1,13 +1,13 @@
 use super::{ActiveRequestItems, LookupVerifyError};
 use lighthouse_network::rpc::methods::DataColumnsByRangeRequest;
 use std::sync::Arc;
-use types::{DataColumnSidecar, EthSpec, Slot};
+use types::{DataColumnSidecar, DataColumnSidecarList, EthSpec, Slot};
 
 /// Accumulates results of a data_columns_by_range request. Only returns items after receiving the
 /// stream termination.
 pub struct DataColumnsByRangeRequestItems<E: EthSpec> {
     request: DataColumnsByRangeRequest,
-    items: Vec<Arc<DataColumnSidecar<E>>>,
+    items: DataColumnSidecarList<E>,
 }
 
 impl<E: EthSpec> DataColumnsByRangeRequestItems<E> {

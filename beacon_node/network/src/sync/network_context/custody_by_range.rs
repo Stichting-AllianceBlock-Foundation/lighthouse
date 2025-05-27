@@ -16,16 +16,14 @@ use std::time::{Duration, Instant};
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use tracing::{debug, warn};
 use types::{
-    data_column_sidecar::ColumnIndex, DataColumnSidecar, Epoch, EthSpec, Hash256,
-    SignedBeaconBlockHeader, Slot,
+    data_column_sidecar::ColumnIndex, DataColumnSidecar, DataColumnSidecarList, Epoch, EthSpec,
+    Hash256, SignedBeaconBlockHeader, Slot,
 };
 
 use super::{PeerGroup, RpcResponseResult, SyncNetworkContext};
 
 const TEMPORARY_FAULT_EXPIRY_SECONDS: u64 = 15;
 const REQUEST_EXPIRY_SECONDS: u64 = 300;
-
-type DataColumnSidecarList<E> = Vec<Arc<DataColumnSidecar<E>>>;
 
 pub struct ActiveCustodyByRangeRequest<T: BeaconChainTypes> {
     start_time: Instant,

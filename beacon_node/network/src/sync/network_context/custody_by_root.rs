@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use strum::IntoStaticStr;
 use tracing::{debug, warn};
-use types::{data_column_sidecar::ColumnIndex, DataColumnSidecar, Hash256};
+use types::{data_column_sidecar::ColumnIndex, DataColumnSidecar, DataColumnSidecarList, Hash256};
 
 use super::{LookupRequestResult, PeerGroup, RpcResponseResult, SyncNetworkContext};
 
@@ -23,8 +23,6 @@ const FAILED_PEERS_CACHE_EXPIRY_SECONDS: u64 = 5;
 const REQUEST_EXPIRY_SECONDS: u64 = 300;
 /// TODO(das): this attempt count is nested into the existing lookup request count.
 const MAX_CUSTODY_COLUMN_DOWNLOAD_ATTEMPTS: usize = 3;
-
-type DataColumnSidecarList<E> = Vec<Arc<DataColumnSidecar<E>>>;
 
 pub struct ActiveCustodyByRootRequest<T: BeaconChainTypes> {
     start_time: Instant,

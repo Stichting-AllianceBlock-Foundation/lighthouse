@@ -1216,7 +1216,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         id: DataColumnsByRootRequestId,
         peer_id: PeerId,
         rpc_event: RpcEvent<Arc<DataColumnSidecar<T::EthSpec>>>,
-    ) -> Option<RpcResponseResult<Vec<Arc<DataColumnSidecar<T::EthSpec>>>>> {
+    ) -> Option<RpcResponseResult<DataColumnSidecarList<T::EthSpec>>> {
         let resp = self
             .data_columns_by_root_requests
             .on_response(id, rpc_event);
@@ -1314,7 +1314,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         id: CustodyId,
         req_id: DataColumnsByRootRequestId,
         peer_id: PeerId,
-        resp: RpcResponseResult<Vec<Arc<DataColumnSidecar<T::EthSpec>>>>,
+        resp: RpcResponseResult<DataColumnSidecarList<T::EthSpec>>,
     ) -> Option<CustodyRequestResult<T::EthSpec>> {
         let span = span!(
             Level::INFO,
@@ -1381,7 +1381,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         id: CustodyByRangeRequestId,
         req_id: DataColumnsByRangeRequestId,
         peer_id: PeerId,
-        resp: RpcResponseResult<Vec<Arc<DataColumnSidecar<T::EthSpec>>>>,
+        resp: RpcResponseResult<DataColumnSidecarList<T::EthSpec>>,
     ) -> Option<CustodyRequestResult<T::EthSpec>> {
         // Note: need to remove the request to borrow self again below. Otherwise we can't
         // do nested requests
