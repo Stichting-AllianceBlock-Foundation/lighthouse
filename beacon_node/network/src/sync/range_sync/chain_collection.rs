@@ -51,6 +51,8 @@ pub struct ChainCollection<T: BeaconChainTypes> {
     head_chains: FnvHashMap<ChainId, SyncingChain<T>>,
     /// The current sync state of the process.
     state: RangeSyncState,
+    /// The maximum number of batches to queue before requesting more.
+    batch_buffer_size: usize,
 }
 
 impl<T: BeaconChainTypes> ChainCollection<T> {
@@ -61,12 +63,13 @@ impl<T: BeaconChainTypes> ChainCollection<T> {
             .chain(self.head_chains.values())
     }
 
-    pub fn new(beacon_chain: Arc<BeaconChain<T>>) -> Self {
+    pub fn new(beacon_chain: Arc<BeaconChain<T>>, batch_buffer_size: usize) -> Self {
         ChainCollection {
             beacon_chain,
             finalized_chains: FnvHashMap::default(),
             head_chains: FnvHashMap::default(),
             state: RangeSyncState::Idle,
+            batch_buffer_size,
         }
     }
 
@@ -504,6 +507,7 @@ impl<T: BeaconChainTypes> ChainCollection<T> {
                     target_head_root,
                     peer,
                     sync_type.into(),
+                    self.batch_buffer_size,
                 );
 
                 debug!(

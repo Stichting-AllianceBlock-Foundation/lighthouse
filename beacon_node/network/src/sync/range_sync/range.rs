@@ -90,10 +90,10 @@ where
         name = "range_sync",
         skip_all
     )]
-    pub fn new(beacon_chain: Arc<BeaconChain<T>>) -> Self {
+    pub fn new(beacon_chain: Arc<BeaconChain<T>>, batch_buffer_size: usize) -> Self {
         RangeSync {
             beacon_chain: beacon_chain.clone(),
-            chains: ChainCollection::new(beacon_chain),
+            chains: ChainCollection::new(beacon_chain, batch_buffer_size),
             failed_chains: LRUTimeCache::new(std::time::Duration::from_secs(
                 FAILED_CHAINS_EXPIRY_SECONDS,
             )),

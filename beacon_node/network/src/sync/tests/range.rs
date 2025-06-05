@@ -4,12 +4,12 @@ use crate::status::ToStatusMessage;
 use crate::sync::manager::SLOT_IMPORT_TOLERANCE;
 use crate::sync::network_context::{BlockComponentsByRangeRequestStep, RangeRequestId};
 use crate::sync::range_sync::{BatchId, BatchState, RangeSyncType};
+use crate::sync::tests::lookups::TestOptions;
 use crate::sync::{ChainId, SyncMessage};
 use beacon_chain::data_column_verification::CustodyDataColumn;
-use beacon_chain::test_utils::{test_spec, AttestationStrategy, BlockStrategy};
+use beacon_chain::test_utils::{AttestationStrategy, BlockStrategy};
 use beacon_chain::{block_verification_types::RpcBlock, EngineState, NotifyExecutionLayer};
 use beacon_processor::WorkType;
-use lighthouse_network::discovery::{peer_id_to_node_id, CombinedKey};
 use lighthouse_network::rpc::methods::{
     BlobsByRangeRequest, DataColumnsByRangeRequest, OldBlocksByRangeRequest,
 };
@@ -19,16 +19,13 @@ use lighthouse_network::service::api_types::{
     DataColumnsByRangeRequestId, SyncRequestId,
 };
 use lighthouse_network::types::SyncState;
-use lighthouse_network::{Enr, EnrExt, PeerId, SyncInfo};
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
+use lighthouse_network::{PeerId, SyncInfo};
 use std::collections::HashSet;
 use std::time::Duration;
-use types::data_column_custody_group::compute_subnets_for_node;
 use types::{
-    BeaconBlock, BlobSidecarList, BlockImportSource, ColumnIndex, DataColumnSidecar,
-    DataColumnSubnetId, Epoch, EthSpec, Hash256, KzgCommitment, MinimalEthSpec as E, Signature,
-    SignedBeaconBlock, SignedBeaconBlockHash, Slot, VariableList,
+    BeaconBlock, BlobSidecarList, BlockImportSource, ColumnIndex, DataColumnSidecar, Epoch,
+    EthSpec, Hash256, KzgCommitment, MinimalEthSpec as E, Signature, SignedBeaconBlock,
+    SignedBeaconBlockHash, Slot, VariableList,
 };
 
 const D: Duration = Duration::new(0, 0);
@@ -92,6 +89,12 @@ struct RequestFilter {
     epoch: Option<u64>,
     column_index: Option<u64>,
 }
+
+const NO_FILTER: RequestFilter = RequestFilter {
+    peer: None,
+    epoch: None,
+    column_index: None,
+};
 
 impl RequestFilter {
     fn peer(mut self, peer: PeerId) -> Self {
@@ -1094,7 +1097,7 @@ fn finalized_sync_not_enough_custody_peers_on_start(config: Config) {
 
     // The SyncingChain has a single peer, so it can issue blocks_by_range requests. However, it
     // doesn't have enough peers to cover all columns
-    r.progress_until_no_events(filter(), complete());
+    r.progress_until_no_events(NO_FILTER, complete());
     r.expect_no_active_rpc_requests();
 
     // Here we have a batch with partially completed block_components_by_range requests. The batch
@@ -1108,7 +1111,7 @@ fn finalized_sync_not_enough_custody_peers_on_start(config: Config) {
     // We still need to add enough peers to trigger batch downloads with idle peers. Same issue as
     // the test above.
 
-    r.progress_until_no_events(filter(), complete());
+    r.progress_until_no_events(NO_FILTER, complete());
     r.expect_no_active_rpc_requests();
     r.expect_no_active_block_components_by_range_requests();
     // TOOD(das): For now this tests don't complete sync. We can't track beacon processor Work
@@ -1134,7 +1137,7 @@ fn finalized_sync_single_custody_peer_failure() {
     // Progress all blocks_by_range and columns_by_range requests but respond empty for a single
     // column index
     r.progress_until_no_events(
-        filter(),
+        NO_FILTER,
         complete().custody_failure_at_index(column_index_to_fail),
     );
     r.expect_penalties("custody_failure");
@@ -1162,7 +1165,13 @@ fn finalized_sync_single_custody_peer_failure() {
 
 #[test]
 fn finalized_sync_permanent_custody_peer_failure() {
-    let mut r = TestRig::test_setup();
+    let mut r = TestRig::test_setup_with_options(TestOptions {
+        is_supernode: false,
+        // The default buffer size is 5, but we want to manually complete only the batch for epoch
+        // 0. By setting this buffer to 1 sync will create a single batch until it completes. We can
+        // do better assertions of state assuming there's only one batch and logs are cleaner.
+        batch_buffer_size: 1,
+    });
     // Only run post-PeerDAS
     if !r.fork_name.fulu_enabled() {
         return;
@@ -1192,7 +1201,7 @@ fn finalized_sync_permanent_custody_peer_failure() {
 
         // Some peer had a costudy failure at `column_index` so sync should do a single extra request
         // for that index and epoch. We want to make sure that the request goes to different peer
-        // than the attempts before.
+        // than the attempted before.
         let reqs =
             r.find_data_by_range_request(filter().epoch(0).column_index(column_index_to_fail));
         let req_peer = reqs.peer();
@@ -1211,36 +1220,4 @@ fn finalized_sync_permanent_custody_peer_failure() {
 
     // custody_by_range request is still active waiting for a new peer to connect
     r.expect_active_block_components_by_range_request_on_custody_step();
-}
-
-#[test]
-#[ignore]
-fn mine_peerids() {
-    let spec = test_spec::<E>();
-    let mut rng = ChaCha20Rng::from_seed([0u8; 32]);
-
-    let expected_subnets = (0..3)
-        .map(|i| DataColumnSubnetId::new(i as u64))
-        .collect::<HashSet<_>>();
-
-    for i in 0..usize::MAX {
-        let key: CombinedKey = k256::ecdsa::SigningKey::random(&mut rng).into();
-        let enr = Enr::builder().build(&key).unwrap();
-        let peer_id = enr.peer_id();
-        // Use default custody groups count
-        let node_id = peer_id_to_node_id(&peer_id).expect("convert peer_id to node_id");
-        let subnets = compute_subnets_for_node(node_id.raw(), spec.custody_requirement, &spec)
-            .expect("should compute custody subnets");
-        if expected_subnets == subnets {
-            panic!("{:?}", subnets);
-        } else {
-            let matches = expected_subnets
-                .iter()
-                .filter(|index| subnets.contains(index))
-                .count();
-            if matches > 0 {
-                println!("{i} {:?}", matches);
-            }
-        }
-    }
 }

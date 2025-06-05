@@ -50,6 +50,7 @@ use crate::sync::block_lookups::{
     BlobRequestState, BlockComponent, BlockRequestState, CustodyRequestState, DownloadResult,
 };
 use crate::sync::network_context::PeerGroup;
+use crate::sync::range_sync::BATCH_BUFFER_SIZE;
 use beacon_chain::block_verification_types::AsBlock;
 use beacon_chain::validator_monitor::timestamp_now;
 use beacon_chain::{
@@ -280,6 +281,7 @@ pub fn spawn<T: BeaconChainTypes>(
         sync_recv,
         SamplingConfig::Default,
         fork_context,
+        BATCH_BUFFER_SIZE,
     );
 
     // spawn the sync manager thread
@@ -302,6 +304,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
         sync_recv: mpsc::UnboundedReceiver<SyncMessage<T::EthSpec>>,
         sampling_config: SamplingConfig,
         fork_context: Arc<ForkContext>,
+        batch_buffer_size: usize,
     ) -> Self {
         let network_globals = beacon_processor.network_globals.clone();
         Self {
@@ -313,7 +316,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                 beacon_chain.clone(),
                 fork_context.clone(),
             ),
-            range_sync: RangeSync::new(beacon_chain.clone()),
+            range_sync: RangeSync::new(beacon_chain.clone(), batch_buffer_size),
             backfill_sync: BackFillSync::new(beacon_chain.clone(), network_globals),
             block_lookups: BlockLookups::new(),
             notified_unknown_roots: LRUTimeCache::new(Duration::from_secs(

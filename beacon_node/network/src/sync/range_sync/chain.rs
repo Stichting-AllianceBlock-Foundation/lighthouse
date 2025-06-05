@@ -26,7 +26,7 @@ use types::{Epoch, EthSpec, Hash256, Slot};
 pub const EPOCHS_PER_BATCH: u64 = 1;
 
 /// The maximum number of batches to queue before requesting more.
-const BATCH_BUFFER_SIZE: u8 = 5;
+pub const BATCH_BUFFER_SIZE: usize = 5;
 
 /// A return type for functions that act on a `Chain` which informs the caller whether the chain
 /// has been completed and should be removed or to be kept if further processing is
@@ -119,6 +119,9 @@ pub struct SyncingChain<T: BeaconChainTypes> {
 
     /// The current processing batch, if any.
     current_processing_batch: Option<BatchId>,
+
+    /// The maximum number of batches to queue before requesting more.
+    batch_buffer_size: usize,
 }
 
 #[derive(PartialEq, Debug)]
@@ -147,6 +150,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         target_head_root: Hash256,
         peer_id: PeerId,
         chain_type: SyncingChainType,
+        batch_buffer_size: usize,
     ) -> Self {
         SyncingChain {
             id,
@@ -163,6 +167,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
             attempted_optimistic_starts: HashSet::default(),
             state: ChainSyncingState::Stopped,
             current_processing_batch: None,
+            batch_buffer_size,
         }
     }
 
@@ -1075,7 +1080,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
             .iter()
             .filter(|&(_epoch, batch)| in_buffer(batch))
             .count()
-            > BATCH_BUFFER_SIZE as usize
+            >= self.batch_buffer_size as usize
         {
             return None;
         }
@@ -1105,28 +1110,28 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
     /// batch states. See [BatchState::visualize] for symbol definitions.
     #[instrument(parent = None,level = "info", fields(chain = self.id , service = "range_sync"), skip_all)]
     fn visualize_batch_state(&self) -> String {
-        let mut visualization_string = String::with_capacity((BATCH_BUFFER_SIZE * 3) as usize);
+        let mut visualization_string = String::with_capacity((self.batch_buffer_size * 3) as usize);
 
         // Start of the block
         visualization_string.push('[');
 
-        for mut batch_index in 0..BATCH_BUFFER_SIZE {
+        for mut batch_index in 0..self.batch_buffer_size {
             if let Some(batch) = self
                 .batches
                 .get(&(self.processing_target + batch_index as u64 * EPOCHS_PER_BATCH))
             {
                 visualization_string.push(batch.visualize());
-                if batch_index != BATCH_BUFFER_SIZE {
+                if batch_index != self.batch_buffer_size {
                     // Add a comma in between elements
                     visualization_string.push(',');
                 }
             } else {
                 // No batch exists, it is on our list to be downloaded
                 // Fill in the rest of the gaps
-                while batch_index < BATCH_BUFFER_SIZE {
+                while batch_index < self.batch_buffer_size {
                     visualization_string.push('E');
                     // Add a comma between the empty batches
-                    if batch_index < BATCH_BUFFER_SIZE.saturating_sub(1) {
+                    if batch_index < self.batch_buffer_size.saturating_sub(1) {
                         visualization_string.push(',')
                     }
                     batch_index += 1;

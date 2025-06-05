@@ -2,6 +2,7 @@ use crate::network_beacon_processor::NetworkBeaconProcessor;
 use crate::sync::block_lookups::{
     BlockLookupSummary, PARENT_DEPTH_TOLERANCE, SINGLE_BLOCK_LOOKUP_MAX_ATTEMPTS,
 };
+use crate::sync::range_sync::BATCH_BUFFER_SIZE;
 use crate::sync::{
     manager::{BlockProcessType, BlockProcessingResult, SyncManager},
     peer_sampling::SamplingConfig,
@@ -59,16 +60,29 @@ pub enum PeersConfig {
     SupernodeOnly,
 }
 
+pub struct TestOptions {
+    /// If the node created by this test harness is a supernode
+    pub is_supernode: bool,
+    /// The maximum number of batches to queue before requesting more.
+    pub batch_buffer_size: usize,
+}
+
 impl TestRig {
     pub fn test_setup() -> Self {
-        Self::test_setup_with_options(false)
+        Self::test_setup_with_options(TestOptions {
+            is_supernode: false,
+            batch_buffer_size: BATCH_BUFFER_SIZE,
+        })
     }
 
     pub fn test_setup_as_supernode() -> Self {
-        Self::test_setup_with_options(true)
+        Self::test_setup_with_options(TestOptions {
+            is_supernode: true,
+            batch_buffer_size: BATCH_BUFFER_SIZE,
+        })
     }
 
-    fn test_setup_with_options(is_supernode: bool) -> Self {
+    pub fn test_setup_with_options(options: TestOptions) -> Self {
         // Use `fork_from_env` logic to set correct fork epochs
         let spec = test_spec::<E>();
 
@@ -101,7 +115,7 @@ impl TestRig {
             Vec::new(),
             network_config,
             chain.spec.clone(),
-            is_supernode,
+            options.is_supernode,
         ));
         let (beacon_processor, beacon_processor_rx) = NetworkBeaconProcessor::null_for_testing(
             globals,
@@ -143,6 +157,7 @@ impl TestRig {
                     required_successes: vec![SAMPLING_REQUIRED_SUCCESSES],
                 },
                 fork_context,
+                options.batch_buffer_size,
             ),
             harness,
             fork_name,
