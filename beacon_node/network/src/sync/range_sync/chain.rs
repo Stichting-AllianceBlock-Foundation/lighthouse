@@ -1080,7 +1080,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
             .iter()
             .filter(|&(_epoch, batch)| in_buffer(batch))
             .count()
-            >= self.batch_buffer_size as usize
+            >= self.batch_buffer_size
         {
             return None;
         }
@@ -1110,7 +1110,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
     /// batch states. See [BatchState::visualize] for symbol definitions.
     #[instrument(parent = None,level = "info", fields(chain = self.id , service = "range_sync"), skip_all)]
     fn visualize_batch_state(&self) -> String {
-        let mut visualization_string = String::with_capacity((self.batch_buffer_size * 3) as usize);
+        let mut visualization_string = String::with_capacity(self.batch_buffer_size * 3);
 
         // Start of the block
         visualization_string.push('[');
