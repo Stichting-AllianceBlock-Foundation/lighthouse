@@ -305,17 +305,9 @@ impl<E: EthSpec, B: BatchConfig> BatchInfo<E, B> {
     /// The `peer` parameter, when set to None, does not increment the failed attempts of
     /// this batch and register the peer, rather attempts a re-download.
     #[must_use = "Batch may have failed"]
-    pub fn download_failed(
-        &mut self,
-        peer: Option<PeerId>,
-    ) -> Result<BatchOperationOutcome, WrongState> {
+    pub fn download_failed(&mut self) -> Result<BatchOperationOutcome, WrongState> {
         match self.state.poison() {
             BatchState::Downloading(_request_id) => {
-                // register the attempt and check if the batch can be tried again
-                if let Some(peer) = peer {
-                    self.failed_peers.insert(peer);
-                }
-
                 self.failed_download_attempts += 1;
 
                 self.state =

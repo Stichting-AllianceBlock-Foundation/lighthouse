@@ -330,9 +330,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                 return Ok(());
             }
             debug!(batch_epoch = %batch_id, error = ?err, "Batch download failed");
-            // TODO(das): Is it necessary for the batch to track failed peers? Can we make this
-            // mechanism compatible with PeerDAS and before PeerDAS?
-            match batch.download_failed(None) {
+            match batch.download_failed() {
                 Err(e) => self.fail_sync(BackFillError::BatchInvalidState(batch_id, e.0)),
                 Ok(BatchOperationOutcome::Failed { blacklist: _ }) => self.fail_sync(match err {
                     RpcResponseError::RpcError(_)
@@ -956,7 +954,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                             return self.fail_sync(BackFillError::BatchInvalidState(batch_id, e.0));
                         }
 
-                        match batch.download_failed(None) {
+                        match batch.download_failed() {
                             Err(e) => {
                                 self.fail_sync(BackFillError::BatchInvalidState(batch_id, e.0))?
                             }

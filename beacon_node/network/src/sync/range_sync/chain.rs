@@ -902,11 +902,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
                 %request_id,
                 "Batch download error"
             );
-            if let BatchOperationOutcome::Failed { blacklist } =
-                // TODO(das): Is it necessary for the batch to track failed peers? Can we make this
-                // mechanism compatible with PeerDAS and before PeerDAS?
-                batch.download_failed(None)?
-            {
+            if let BatchOperationOutcome::Failed { blacklist } = batch.download_failed()? {
                 return Err(RemoveChain::ChainFailed {
                     blacklist,
                     failing_batch: batch_id,
@@ -966,7 +962,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
                         warn!(%batch_id, error = ?e, "batch_id" = %batch_id, %batch, "Could not send batch request");
                         // register the failed download and check if the batch can be retried
                         batch.start_downloading(1)?; // fake request_id = 1 is not relevant
-                        match batch.download_failed(None)? {
+                        match batch.download_failed()? {
                             BatchOperationOutcome::Failed { blacklist } => {
                                 return Err(RemoveChain::ChainFailed {
                                     blacklist,
