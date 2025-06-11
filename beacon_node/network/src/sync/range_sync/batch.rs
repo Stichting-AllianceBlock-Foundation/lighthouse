@@ -112,7 +112,7 @@ pub enum BatchOperationOutcome {
 
 pub enum BatchProcessingResult {
     Success,
-    FaultyFailure,
+    FaultyFailure(Vec<PeerId>),
     NonFaultyFailure,
 }
 
@@ -128,7 +128,9 @@ pub struct BatchInfo<E: EthSpec, B: BatchConfig = RangeSyncBatchConfig> {
     /// Number of processing attempts that have failed but we do not count.
     non_faulty_processing_attempts: u8,
     /// The number of download retries this batch has undergone due to a failed request.
-    failed_download_attempts: Vec<Option<PeerId>>,
+    failed_download_attempts: usize,
+    /// Peers that returned bad data, and we want to de-prioritize
+    failed_peers: HashSet<PeerId>,
     /// State of the batch.
     state: BatchState<E>,
     /// Pin the generic
@@ -197,7 +199,8 @@ impl<E: EthSpec, B: BatchConfig> BatchInfo<E, B> {
             start_slot,
             end_slot,
             failed_processing_attempts: Vec::new(),
-            failed_download_attempts: Vec::new(),
+            failed_download_attempts: 0,
+            failed_peers: <_>::default(),
             non_faulty_processing_attempts: 0,
             state: BatchState::AwaitingDownload,
             marker: std::marker::PhantomData,
@@ -206,23 +209,8 @@ impl<E: EthSpec, B: BatchConfig> BatchInfo<E, B> {
 
     /// Gives a list of peers from which this batch has had a failed download or processing
     /// attempt.
-    ///
-    /// TODO(das): Returns only block peers to keep the mainnet path equivalent. The failed peers
-    /// mechanism is broken for PeerDAS and will be fixed with https://github.com/sigp/lighthouse/issues/6258
-    pub fn failed_block_peers(&self) -> HashSet<PeerId> {
-        let mut peers = HashSet::with_capacity(
-            self.failed_processing_attempts.len() + self.failed_download_attempts.len(),
-        );
-
-        for attempt in &self.failed_processing_attempts {
-            peers.insert(attempt.peers.block());
-        }
-
-        for peer in self.failed_download_attempts.iter().flatten() {
-            peers.insert(*peer);
-        }
-
-        peers
+    pub fn failed_peers(&self) -> &HashSet<PeerId> {
+        &self.failed_peers
     }
 
     /// Verifies if an incoming block belongs to this batch.
@@ -272,8 +260,7 @@ impl<E: EthSpec, B: BatchConfig> BatchInfo<E, B> {
         match self.state {
             BatchState::Poisoned => unreachable!("Poisoned batch"),
             BatchState::Failed => BatchOperationOutcome::Failed {
-                blacklist: self.failed_processing_attempts.len()
-                    > self.failed_download_attempts.len(),
+                blacklist: self.failed_processing_attempts.len() > self.failed_download_attempts,
             },
             _ => BatchOperationOutcome::Continue,
         }
@@ -325,15 +312,19 @@ impl<E: EthSpec, B: BatchConfig> BatchInfo<E, B> {
         match self.state.poison() {
             BatchState::Downloading(_request_id) => {
                 // register the attempt and check if the batch can be tried again
-                self.failed_download_attempts.push(peer);
-                self.state = if self.failed_download_attempts.len()
-                    >= B::max_batch_download_attempts() as usize
-                {
-                    BatchState::Failed
-                } else {
-                    // drop the blocks
-                    BatchState::AwaitingDownload
-                };
+                if let Some(peer) = peer {
+                    self.failed_peers.insert(peer);
+                }
+
+                self.failed_download_attempts += 1;
+
+                self.state =
+                    if self.failed_download_attempts >= B::max_batch_download_attempts() as usize {
+                        BatchState::Failed
+                    } else {
+                        // drop the blocks
+                        BatchState::AwaitingDownload
+                    };
                 Ok(self.outcome())
             }
             BatchState::Poisoned => unreachable!("Poisoned batch"),
@@ -390,9 +381,12 @@ impl<E: EthSpec, B: BatchConfig> BatchInfo<E, B> {
             BatchState::Processing(attempt) => {
                 self.state = match procesing_result {
                     BatchProcessingResult::Success => BatchState::AwaitingValidation(attempt),
-                    BatchProcessingResult::FaultyFailure => {
+                    BatchProcessingResult::FaultyFailure(failed_peers) => {
                         // register the failed attempt
                         self.failed_processing_attempts.push(attempt);
+                        for peer in failed_peers {
+                            self.failed_peers.insert(peer);
+                        }
 
                         // check if the batch can be downloaded again
                         if self.failed_processing_attempts.len()

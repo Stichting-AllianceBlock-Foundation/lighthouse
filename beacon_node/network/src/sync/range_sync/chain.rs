@@ -539,10 +539,13 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
                 // TODO(sync): propagate error in logs
                 error: _,
             } => {
+                let mut failed_peers = vec![];
+
                 // TODO(sync): De-dup between back and forwards sync
                 if let Some(penalty) = peer_action.block_peer {
                     // Penalize the peer appropiately.
                     network.report_peer(batch_peers.block(), penalty, "faulty_batch");
+                    failed_peers.push(batch_peers.block());
                 }
 
                 // Penalize each peer only once. Currently a peer_action does not mix different
@@ -558,10 +561,13 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
                     .unique()
                 {
                     network.report_peer(peer, penalty, "faulty_batch_column");
+                    failed_peers.push(peer);
                 }
 
                 // Check if this batch is allowed to continue
-                match batch.processing_completed(BatchProcessingResult::FaultyFailure)? {
+                match batch
+                    .processing_completed(BatchProcessingResult::FaultyFailure(failed_peers))?
+                {
                     BatchOperationOutcome::Continue => {
                         // Chain can continue. Check if it can be moved forward.
                         if *imported_blocks > 0 {
@@ -929,7 +935,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         let batch_state = self.visualize_batch_state();
         if let Some(batch) = self.batches.get_mut(&batch_id) {
             let request = batch.to_blocks_by_range_request();
-            let failed_peers = batch.failed_block_peers();
+            let failed_peers = batch.failed_peers();
 
             match network.block_components_by_range_request(
                 request,
@@ -938,7 +944,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
                     batch_id,
                 },
                 self.peers.clone(),
-                &failed_peers,
+                failed_peers,
             ) {
                 Ok(request_id) => {
                     // inform the batch about the new request

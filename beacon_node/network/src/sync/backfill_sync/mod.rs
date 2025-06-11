@@ -617,9 +617,12 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                 error,
             } => {
                 // TODO(sync): De-dup between back and forwards sync
+                let mut failed_peers = vec![];
+
                 if let Some(penalty) = peer_action.block_peer {
                     // Penalize the peer appropiately.
                     network.report_peer(batch_peers.block(), penalty, "faulty_batch");
+                    failed_peers.push(batch_peers.block());
                 }
 
                 // Penalize each peer only once. Currently a peer_action does not mix different
@@ -635,9 +638,11 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                     .unique()
                 {
                     network.report_peer(peer, penalty, "faulty_batch_column");
+                    failed_peers.push(peer);
                 }
 
-                match batch.processing_completed(BatchProcessingResult::FaultyFailure) {
+                match batch.processing_completed(BatchProcessingResult::FaultyFailure(failed_peers))
+                {
                     Err(e) => {
                         // Batch was in the wrong state
                         self.fail_sync(BackFillError::BatchInvalidState(batch_id, e.0))
@@ -926,12 +931,12 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
     ) -> Result<(), BackFillError> {
         if let Some(batch) = self.batches.get_mut(&batch_id) {
             let request = batch.to_blocks_by_range_request();
-            let failed_peers = batch.failed_block_peers();
+            let failed_peers = batch.failed_peers();
             match network.block_components_by_range_request(
                 request,
                 RangeRequestId::BackfillSync { batch_id },
                 self.peers.clone(),
-                &failed_peers,
+                failed_peers,
             ) {
                 Ok(request_id) => {
                     // inform the batch about the new request
