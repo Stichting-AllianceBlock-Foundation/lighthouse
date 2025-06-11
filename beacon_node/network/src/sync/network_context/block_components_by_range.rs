@@ -138,9 +138,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
         else {
             // When a peer disconnects and is removed from the SyncingChain peer set, if the set
             // reaches zero the SyncingChain is removed.
-            return Err(RpcRequestSendError::InternalError(
-                "A batch peer set should never be empty".to_string(),
-            ));
+            return Err(RpcRequestSendError::NoPeers);
         };
 
         let blocks_req_id = cx.send_blocks_by_range_request(block_peer, request.clone(), id)?;
@@ -269,6 +267,10 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
                                     RpcRequestSendError::InternalError(e) => {
                                         Error::InternalError(e)
                                     }
+                                    RpcRequestSendError::NoPeers => Error::InternalError(
+                                        "send_custody_by_range_request does not error with NoPeers"
+                                            .to_owned(),
+                                    ),
                                 })?;
 
                             *state = FuluEnabledState::CustodyRequest {

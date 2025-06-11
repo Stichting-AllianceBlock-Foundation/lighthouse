@@ -301,6 +301,14 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
 
     pub fn peer_disconnected(&mut self, peer_id: &PeerId) {
         self.peers.write().remove(peer_id);
+
+        if self.peers.read().is_empty() {
+            info!(
+                "reason" = "insufficient_synced_peers",
+                "Backfill sync paused"
+            );
+            self.set_state(BackFillState::Paused);
+        }
     }
 
     /// An RPC error has occurred.
@@ -946,6 +954,15 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                     return Ok(());
                 }
                 Err(e) => match e {
+                    RpcRequestSendError::NoPeers => {
+                        // If we are here the chain has no more synced peers
+                        info!(
+                            "reason" = "insufficient_synced_peers",
+                            "Backfill sync paused"
+                        );
+                        self.set_state(BackFillState::Paused);
+                        return Err(BackFillError::Paused);
+                    }
                     RpcRequestSendError::InternalError(e) => {
                         // NOTE: under normal conditions this shouldn't happen but we handle it anyway
                         warn!(%batch_id, error = ?e, %batch,"Could not send batch request");

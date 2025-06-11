@@ -98,6 +98,7 @@ pub enum RpcRequestSendError {
     // If RpcRequestSendError has a single variant `InternalError` it's to signal to downstream
     // consumers that sends are expected to be infallible. If this assumption changes in the future,
     // add a new variant.
+    NoPeers,
 }
 
 #[derive(Debug, PartialEq, Eq)]

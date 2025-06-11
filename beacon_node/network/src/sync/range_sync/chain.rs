@@ -957,7 +957,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
                     return Ok(KeepChain);
                 }
                 Err(e) => match e {
-                    RpcRequestSendError::InternalError(e) => {
+                    e @ (RpcRequestSendError::NoPeers | RpcRequestSendError::InternalError(_)) => {
                         // NOTE: under normal conditions this shouldn't happen but we handle it anyway
                         warn!(%batch_id, error = ?e, "batch_id" = %batch_id, %batch, "Could not send batch request");
                         // register the failed download and check if the batch can be retried
