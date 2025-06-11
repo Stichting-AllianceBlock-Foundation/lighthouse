@@ -1,6 +1,5 @@
 use crate::sync::network_context::PeerGroup;
 use beacon_chain::block_verification_types::RpcBlock;
-use itertools::Itertools;
 use lighthouse_network::rpc::methods::BlocksByRangeRequest;
 use lighthouse_network::service::api_types::Id;
 use lighthouse_network::PeerId;
@@ -45,12 +44,6 @@ impl BatchPeers {
 
     pub fn column(&self, index: &ColumnIndex) -> Option<&PeerId> {
         self.column_peers.of_index(&((*index) as usize))
-    }
-
-    pub fn iter_unique_peers(&self) -> impl Iterator<Item = &PeerId> {
-        std::iter::once(&self.block_peer)
-            .chain(self.column_peers.all())
-            .unique()
     }
 }
 

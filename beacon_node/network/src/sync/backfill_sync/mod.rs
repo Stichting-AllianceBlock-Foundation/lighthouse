@@ -26,7 +26,7 @@ use logging::crit;
 use parking_lot::RwLock;
 use std::collections::{
     btree_map::{BTreeMap, Entry},
-    HashMap, HashSet,
+    HashSet,
 };
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
@@ -932,8 +932,6 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
                 RangeRequestId::BackfillSync { batch_id },
                 self.peers.clone(),
                 &failed_peers,
-                // Does not track total requests per peers for now
-                &HashMap::new(),
             ) {
                 Ok(request_id) => {
                     // inform the batch about the new request

@@ -105,7 +105,6 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
         request: BlocksByRangeRequest,
         peers: Arc<RwLock<HashSet<PeerId>>>,
         peers_to_deprioritize: &HashSet<PeerId>,
-        total_requests_per_peer: &HashMap<PeerId, usize>,
         cx: &mut SyncNetworkContext<T>,
     ) -> Result<Self, RpcRequestSendError> {
         // Induces a compile time panic if this doesn't hold true.
@@ -129,19 +128,13 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
                 (
                     // If contains -> 1 (order after), not contains -> 0 (order first)
                     peers_to_deprioritize.contains(peer),
-                    // TODO(das): Should we use active_request_count_by_peer?
-                    // Prefer peers with less overall requests
-                    // active_request_count_by_peer.get(peer).copied().unwrap_or(0),
-                    // Prefer peers with less total cummulative requests, so we fetch data from a
-                    // diverse set of peers
-                    total_requests_per_peer.get(peer).copied().unwrap_or(0),
                     // Random factor to break ties, otherwise the PeerID breaks ties
                     rand::random::<u32>(),
                     peer,
                 )
             })
             .min()
-            .map(|(_, _, _, peer)| *peer)
+            .map(|(_, _, peer)| *peer)
         else {
             // When a peer disconnects and is removed from the SyncingChain peer set, if the set
             // reaches zero the SyncingChain is removed.
