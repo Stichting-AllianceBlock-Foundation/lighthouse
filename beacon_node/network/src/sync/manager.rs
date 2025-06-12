@@ -416,7 +416,6 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                 PeerSyncType::Advanced => {
                     self.range_sync
                         .add_peer(&mut self.network, local, peer_id, remote);
-                    self.backfill_sync.add_peer(peer_id);
                 }
                 PeerSyncType::FullySynced => {
                     // Sync considers this peer close enough to the head to not trigger range sync.
@@ -432,6 +431,13 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                     if !self.chain.block_is_known_to_fork_choice(&remote.head_root) {
                         self.handle_unknown_block_root(peer_id, remote.head_root);
                     }
+                }
+            }
+
+            match sync_type {
+                PeerSyncType::Behind => {}
+                PeerSyncType::Advanced | PeerSyncType::FullySynced => {
+                    self.backfill_sync.add_peer(peer_id);
                 }
             }
         }
