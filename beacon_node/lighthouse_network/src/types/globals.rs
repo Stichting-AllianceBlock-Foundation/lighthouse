@@ -248,6 +248,10 @@ impl<E: EthSpec> NetworkGlobals<E> {
         }
     }
 
+    pub fn sampling_columns_count(&self) -> usize {
+        self.sampling_columns.read().len()
+    }
+
     pub fn sampling_columns(&self) -> HashSet<ColumnIndex> {
         self.sampling_columns.read().clone()
     }

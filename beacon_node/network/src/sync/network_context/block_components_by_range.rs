@@ -188,10 +188,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
             } => {
                 if let Some((blocks, block_peer)) = blocks_by_range_request.to_finished() {
                     let peer_group = BatchPeers::new_from_block_peer(*block_peer);
-                    let rpc_blocks = couple_blocks_base(
-                        blocks.to_vec(),
-                        cx.network_globals().sampling_columns.len(),
-                    );
+                    let rpc_blocks = couple_blocks_base(blocks.to_vec());
                     Ok(Some((rpc_blocks, peer_group)))
                 } else {
                     // Wait for blocks_by_range requests to complete
@@ -230,8 +227,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
                         if blocks_with_data.is_empty() {
                             let custody_column_indices = cx
                                 .network_globals()
-                                .sampling_columns
-                                .clone()
+                                .sampling_columns()
                                 .iter()
                                 .copied()
                                 .collect();
@@ -248,8 +244,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
                         } else {
                             let mut column_indices = cx
                                 .network_globals()
-                                .sampling_columns
-                                .clone()
+                                .sampling_columns()
                                 .iter()
                                 .copied()
                                 .collect::<Vec<_>>();
@@ -295,8 +290,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
                     if let Some((columns, column_peers)) = custody_by_range_request.to_finished() {
                         let custody_column_indices = cx
                             .network_globals()
-                            .sampling_columns
-                            .clone()
+                            .sampling_columns()
                             .iter()
                             .copied()
                             .collect();
@@ -425,13 +419,10 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
     }
 }
 
-fn couple_blocks_base<E: EthSpec>(
-    blocks: Vec<Arc<SignedBeaconBlock<E>>>,
-    custody_columns_count: usize,
-) -> Vec<RpcBlock<E>> {
+fn couple_blocks_base<E: EthSpec>(blocks: Vec<Arc<SignedBeaconBlock<E>>>) -> Vec<RpcBlock<E>> {
     blocks
         .into_iter()
-        .map(|block| RpcBlock::new_without_blobs(None, block, custody_columns_count))
+        .map(|block| RpcBlock::new_without_blobs(None, block))
         .collect()
 }
 
@@ -509,7 +500,6 @@ fn couple_blocks_fulu<E: EthSpec>(
                 Some(block_root),
                 block,
                 data_columns_with_block_root,
-                custody_column_indices.clone(),
                 spec,
             )
             .map_err(Error::InternalError)

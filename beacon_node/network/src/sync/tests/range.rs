@@ -209,7 +209,7 @@ fn complete() -> CompleteConfig {
 impl TestRig {
     fn our_custody_indices(&self) -> Vec<ColumnIndex> {
         self.network_globals
-            .sampling_columns
+            .sampling_columns()
             .iter()
             .copied()
             .collect()
