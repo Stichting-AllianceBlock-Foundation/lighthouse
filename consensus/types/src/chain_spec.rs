@@ -789,6 +789,275 @@ impl ChainSpec {
     }
 
     /// Returns a `ChainSpec` compatible with the Ethereum Foundation specification.
+    pub fn custom() -> Self {
+        Self {
+            /*
+             * Config name
+             */
+            config_name: Some("custom".to_string()),
+            /*
+             * Constants
+             */
+            genesis_slot: Slot::new(0),
+            far_future_epoch: Epoch::new(u64::MAX),
+            base_rewards_per_epoch: 4,
+            deposit_contract_tree_depth: 32,
+
+            /*
+             * Misc
+             */
+            max_committees_per_slot: 64,
+            target_committee_size: 128,
+            min_per_epoch_churn_limit: 4,
+            max_per_epoch_activation_churn_limit: 8,
+            churn_limit_quotient: 65_536,
+            shuffle_round_count: 90,
+            min_genesis_active_validator_count: 16_384,
+            min_genesis_time: 1606824000, // Dec 1, 2020
+            hysteresis_quotient: 4,
+            hysteresis_downward_multiplier: 1,
+            hysteresis_upward_multiplier: 5,
+
+            /*
+             *  Gwei values
+             */
+            min_deposit_amount: option_wrapper(|| {
+                u64::checked_pow(2, 0)?.checked_mul(u64::checked_pow(10, 9)?)
+            })
+            .expect("calculation does not overflow"),
+            max_effective_balance: option_wrapper(|| {
+                u64::checked_pow(2, 5)?.checked_mul(u64::checked_pow(10, 9)?)
+            })
+            .expect("calculation does not overflow"),
+            ejection_balance: option_wrapper(|| {
+                u64::checked_pow(2, 4)?.checked_mul(u64::checked_pow(10, 9)?)
+            })
+            .expect("calculation does not overflow"),
+            effective_balance_increment: option_wrapper(|| {
+                u64::checked_pow(2, 0)?.checked_mul(u64::checked_pow(10, 9)?)
+            })
+            .expect("calculation does not overflow"),
+
+            /*
+             * Initial Values
+             */
+            genesis_fork_version: [0; 4],
+            bls_withdrawal_prefix_byte: 0x00,
+            eth1_address_withdrawal_prefix_byte: 0x01,
+            compounding_withdrawal_prefix_byte: 0x02,
+
+            /*
+             * Time parameters
+             */
+            genesis_delay: 604800, // 7 days
+            seconds_per_slot: 12,
+            min_attestation_inclusion_delay: 1,
+            min_seed_lookahead: Epoch::new(1),
+            max_seed_lookahead: Epoch::new(4),
+            min_epochs_to_inactivity_penalty: 4,
+            min_validator_withdrawability_delay: Epoch::new(256),
+            shard_committee_period: 256,
+
+            /*
+             * Reward and penalty quotients
+             */
+            base_reward_factor: 1,
+            whistleblower_reward_quotient: 512,
+            proposer_reward_quotient: 8,
+            inactivity_penalty_quotient: u64::checked_pow(2, 26).expect("pow does not overflow"),
+            min_slashing_penalty_quotient: 128,
+            proportional_slashing_multiplier: 1,
+
+            /*
+             * Signature domains
+             */
+            domain_beacon_proposer: 0,
+            domain_beacon_attester: 1,
+            domain_randao: 2,
+            domain_deposit: 3,
+            domain_voluntary_exit: 4,
+            domain_selection_proof: 5,
+            domain_aggregate_and_proof: 6,
+
+            /*
+             * Fork choice
+             */
+            proposer_score_boost: Some(40),
+            reorg_head_weight_threshold: Some(20),
+            reorg_parent_weight_threshold: Some(160),
+
+            /*
+             * Eth1
+             */
+            eth1_follow_distance: 2048,
+            seconds_per_eth1_block: 14,
+            deposit_chain_id: 1,
+            deposit_network_id: 1,
+            deposit_contract_address: "00000000219ab540356cbb839cbe05303d7705fa"
+                .parse()
+                .expect("chain spec deposit contract address"),
+
+            /*
+             * Execution Specs
+             */
+            gas_limit_adjustment_factor: 1024,
+
+            /*
+             * Altair hard fork params
+             */
+            inactivity_penalty_quotient_altair: option_wrapper(|| {
+                u64::checked_pow(2, 24)?.checked_mul(3)
+            })
+            .expect("calculation does not overflow"),
+            min_slashing_penalty_quotient_altair: u64::checked_pow(2, 6)
+                .expect("pow does not overflow"),
+            proportional_slashing_multiplier_altair: 2,
+            inactivity_score_bias: 4,
+            inactivity_score_recovery_rate: 16,
+            min_sync_committee_participants: 1,
+            epochs_per_sync_committee_period: Epoch::new(256),
+            domain_sync_committee: 7,
+            domain_sync_committee_selection_proof: 8,
+            domain_contribution_and_proof: 9,
+            altair_fork_version: [0x01, 0x00, 0x00, 0x00],
+            altair_fork_epoch: Some(Epoch::new(74240)),
+
+            /*
+             * Bellatrix hard fork params
+             */
+            inactivity_penalty_quotient_bellatrix: u64::checked_pow(2, 24)
+                .expect("pow does not overflow"),
+            min_slashing_penalty_quotient_bellatrix: u64::checked_pow(2, 5)
+                .expect("pow does not overflow"),
+            proportional_slashing_multiplier_bellatrix: 3,
+            bellatrix_fork_version: [0x02, 0x00, 0x00, 0x00],
+            bellatrix_fork_epoch: Some(Epoch::new(144896)),
+            terminal_total_difficulty: "58750000000000000000000"
+                .parse()
+                .expect("terminal_total_difficulty is a valid integer"),
+            terminal_block_hash: ExecutionBlockHash::zero(),
+            terminal_block_hash_activation_epoch: Epoch::new(u64::MAX),
+
+            /*
+             * Capella hard fork params
+             */
+            capella_fork_version: [0x03, 00, 00, 00],
+            capella_fork_epoch: Some(Epoch::new(194048)),
+            max_validators_per_withdrawals_sweep: 16384,
+
+            /*
+             * Deneb hard fork params
+             */
+            deneb_fork_version: [0x04, 0x00, 0x00, 0x00],
+            deneb_fork_epoch: Some(Epoch::new(269568)),
+
+            /*
+             * Electra hard fork params
+             */
+            electra_fork_version: [0x05, 00, 00, 00],
+            electra_fork_epoch: Some(Epoch::new(364032)),
+            unset_deposit_requests_start_index: u64::MAX,
+            full_exit_request_amount: 0,
+            min_activation_balance: option_wrapper(|| {
+                u64::checked_pow(2, 5)?.checked_mul(u64::checked_pow(10, 9)?)
+            })
+            .expect("calculation does not overflow"),
+            max_effective_balance_electra: option_wrapper(|| {
+                u64::checked_pow(2, 11)?.checked_mul(u64::checked_pow(10, 9)?)
+            })
+            .expect("calculation does not overflow"),
+            min_slashing_penalty_quotient_electra: u64::checked_pow(2, 12)
+                .expect("pow does not overflow"),
+            whistleblower_reward_quotient_electra: u64::checked_pow(2, 12)
+                .expect("pow does not overflow"),
+            max_pending_partials_per_withdrawals_sweep: u64::checked_pow(2, 3)
+                .expect("pow does not overflow"),
+            min_per_epoch_churn_limit_electra: option_wrapper(|| {
+                u64::checked_pow(2, 7)?.checked_mul(u64::checked_pow(10, 9)?)
+            })
+            .expect("calculation does not overflow"),
+            max_per_epoch_activation_exit_churn_limit: option_wrapper(|| {
+                u64::checked_pow(2, 8)?.checked_mul(u64::checked_pow(10, 9)?)
+            })
+            .expect("calculation does not overflow"),
+
+            /*
+             * Fulu hard fork params
+             */
+            fulu_fork_version: [0x06, 0x00, 0x00, 0x00],
+            fulu_fork_epoch: None,
+            custody_requirement: 4,
+            number_of_custody_groups: 128,
+            data_column_sidecar_subnet_count: 128,
+            number_of_columns: 128,
+            samples_per_slot: 8,
+            validator_custody_requirement: 8,
+            balance_per_additional_custody_group: 32000000000,
+
+            /*
+             * Network specific
+             */
+            boot_nodes: vec![],
+            network_id: 1, // mainnet network id
+            attestation_propagation_slot_range: default_attestation_propagation_slot_range(),
+            attestation_subnet_count: 64,
+            subnets_per_node: 2,
+            maximum_gossip_clock_disparity_millis: default_maximum_gossip_clock_disparity_millis(),
+            target_aggregators_per_committee: 16,
+            max_payload_size: default_max_payload_size(),
+            min_epochs_for_block_requests: default_min_epochs_for_block_requests(),
+            ttfb_timeout: default_ttfb_timeout(),
+            resp_timeout: default_resp_timeout(),
+            message_domain_invalid_snappy: default_message_domain_invalid_snappy(),
+            message_domain_valid_snappy: default_message_domain_valid_snappy(),
+            attestation_subnet_prefix_bits: default_attestation_subnet_prefix_bits(),
+            max_request_blocks: default_max_request_blocks(),
+
+            /*
+             * Networking Deneb Specific
+             */
+            max_request_blocks_deneb: default_max_request_blocks_deneb(),
+            max_request_blob_sidecars: default_max_request_blob_sidecars(),
+            max_request_data_column_sidecars: default_max_request_data_column_sidecars(),
+            min_epochs_for_blob_sidecars_requests: default_min_epochs_for_blob_sidecars_requests(),
+            blob_sidecar_subnet_count: default_blob_sidecar_subnet_count(),
+            max_blobs_per_block: default_max_blobs_per_block(),
+
+            /*
+             * Derived Deneb Specific
+             */
+            max_blocks_by_root_request: default_max_blocks_by_root_request(),
+            max_blocks_by_root_request_deneb: default_max_blocks_by_root_request_deneb(),
+            max_blobs_by_root_request: default_max_blobs_by_root_request(),
+            max_data_columns_by_root_request: default_data_columns_by_root_request(),
+
+            /*
+             * Networking Electra specific
+             */
+            max_blobs_per_block_electra: default_max_blobs_per_block_electra(),
+            blob_sidecar_subnet_count_electra: default_blob_sidecar_subnet_count_electra(),
+            max_request_blob_sidecars_electra: default_max_request_blob_sidecars_electra(),
+
+            /*
+             * Networking Fulu specific
+             */
+            blob_schedule: BlobSchedule::default(),
+            min_epochs_for_data_column_sidecars_requests:
+                default_min_epochs_for_data_column_sidecars_requests(),
+
+            /*
+             * Application specific
+             */
+            domain_application_mask: APPLICATION_DOMAIN_BUILDER,
+
+            /*
+             * Capella params
+             */
+            domain_bls_to_execution_change: 10,
+        }
+    }
+
+    /// Returns a `ChainSpec` compatible with the Ethereum Foundation specification.
     pub fn mainnet() -> Self {
         Self {
             /*

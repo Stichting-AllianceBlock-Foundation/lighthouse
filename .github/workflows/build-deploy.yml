@@ -1,0 +1,45 @@
+name: abridge-backend-build-deploy
+
+on:
+  push:
+    branches:
+      - base_reward_factor
+      - stable
+
+permissions:
+  id-token: write
+  contents: read
+  packages: read
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    env:
+      PRODUCT: ${{ secrets.PRODUCT }}
+      APPLICATION: ${{ secrets.APPLICATION }}
+      ENVIRONMENT: ${{ secrets.ENVIRONMENT }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ env.PRODUCT }}-${{ env.APPLICATION }}-deployer-${{ env.ENVIRONMENT }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Login to AWS ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to AWS ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: lighthouse
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG --build-arg GHT=${{ secrets.GITHUB_TOKEN }} .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG

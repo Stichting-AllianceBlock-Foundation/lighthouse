@@ -348,5 +348,14 @@ define_hardcoded_nets!(
         "hoodi",
         // Describes how the genesis state can be obtained.
         HOODI_GENESIS_STATE_SOURCE
+    ),
+    (
+        // Network name (must be unique among all networks).
+        custom,
+        // The name of the directory in the `eth2_network_config/built_in_network_configs`
+        // directory where the configuration files are located for this network.
+        "custom",
+        // Describes how the genesis state can be obtained.
+        GenesisStateSource::IncludedBytes
     )
 );
