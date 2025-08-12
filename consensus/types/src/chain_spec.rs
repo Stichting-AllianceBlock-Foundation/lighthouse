@@ -958,14 +958,8 @@ impl ChainSpec {
             electra_fork_epoch: Some(Epoch::new(364032)),
             unset_deposit_requests_start_index: u64::MAX,
             full_exit_request_amount: 0,
-            min_activation_balance: option_wrapper(|| {
-                u64::checked_pow(2, 5)?.checked_mul(u64::checked_pow(10, 9)?)
-            })
-            .expect("calculation does not overflow"),
-            max_effective_balance_electra: option_wrapper(|| {
-                u64::checked_pow(2, 11)?.checked_mul(u64::checked_pow(10, 9)?)
-            })
-            .expect("calculation does not overflow"),
+            min_activation_balance: 6_000_000_000_000_000, // 6,000 ETH in Gwei  
+            max_effective_balance_electra: 6_000_000_000_000_000_000, // 6,000 ETH in Gwei
             min_slashing_penalty_quotient_electra: u64::checked_pow(2, 12)
                 .expect("pow does not overflow"),
             whistleblower_reward_quotient_electra: u64::checked_pow(2, 12)
