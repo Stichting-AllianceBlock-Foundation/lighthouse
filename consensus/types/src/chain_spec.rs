@@ -829,10 +829,7 @@ impl ChainSpec {
                 u64::checked_pow(2, 5)?.checked_mul(u64::checked_pow(10, 9)?)
             })
             .expect("calculation does not overflow"),
-            ejection_balance: option_wrapper(|| {
-                u64::checked_pow(2, 4)?.checked_mul(u64::checked_pow(10, 9)?)
-            })
-            .expect("calculation does not overflow"),
+            ejection_balance: 5_000_000_000_000_000,
             effective_balance_increment: option_wrapper(|| {
                 u64::checked_pow(2, 0)?.checked_mul(u64::checked_pow(10, 9)?)
             })
