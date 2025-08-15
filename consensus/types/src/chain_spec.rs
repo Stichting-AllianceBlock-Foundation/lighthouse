@@ -959,11 +959,11 @@ impl ChainSpec {
             unset_deposit_requests_start_index: u64::MAX,
             full_exit_request_amount: 0,
             min_activation_balance: option_wrapper(|| {
-                u64::checked_pow(2, 22)?.checked_mul(u64::checked_pow(10, 9)?)
+                u64::checked_pow(2, 5)?.checked_mul(u64::checked_pow(10, 9)?)
             })
             .expect("calculation does not overflow"),
             max_effective_balance_electra: option_wrapper(|| {
-                u64::checked_pow(2, 32)?.checked_mul(u64::checked_pow(10, 9)?)
+                u64::checked_pow(2, 11)?.checked_mul(u64::checked_pow(10, 9)?)
             })
             .expect("calculation does not overflow"),
             min_slashing_penalty_quotient_electra: u64::checked_pow(2, 12)
